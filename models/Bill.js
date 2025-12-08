@@ -366,7 +366,11 @@ const billSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Unit'
   },
-  domainId: String
+  domainId: String,
+  collab: [{
+    type: String,
+    index: true
+  }]
 }, {
   timestamps: true,
   collection: 'bills'
