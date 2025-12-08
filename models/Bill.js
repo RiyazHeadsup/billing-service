@@ -354,7 +354,7 @@ const billSchema = new mongoose.Schema({
   },
   billType: {
     type: String,
-    enum: ['QUICK_SALE', 'DETAILED_SALE', 'SERVICE_SALE'],
+    enum: ['QUICK_SALE', 'DETAILED_SALE', 'SERVICE_SALE', 'AUTO_SALE'],
     default: 'QUICK_SALE'
   },
   billStatus: {
