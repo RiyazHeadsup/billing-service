@@ -354,7 +354,7 @@ const billSchema = new mongoose.Schema({
   },
   billType: {
     type: String,
-    enum: ['QUICK_SALE', 'DETAILED_SALE', 'SERVICE_SALE', 'AUTO_SALE'],
+    enum: ['QUICK_SALE', 'DETAILED_SALE', 'SERVICE_SALE', 'AUTO_SALE', 'APPOINTMENT'],
     default: 'QUICK_SALE'
   },
   billStatus: {
@@ -390,7 +390,7 @@ const counterSchema = new mongoose.Schema({
 
 const Counter = mongoose.model('Counter', counterSchema);
 
-billSchema.pre('save', async function(next) {
+billSchema.pre('save', async function (next) {
   if (this.isNew) {
     try {
       if (!this.transactionId) {
@@ -405,7 +405,7 @@ billSchema.pre('save', async function(next) {
           { $inc: { seq: 1 } },
           { new: true, upsert: true }
         );
-        
+
         const year = new Date().getFullYear();
         this.billNumber = `BILL-${year}-${counter.seq}`;
       }
