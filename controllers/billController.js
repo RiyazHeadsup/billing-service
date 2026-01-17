@@ -266,8 +266,12 @@ class BillController {
         }
       }
 
-      // Update dashboard with bill data including incentives
-      await dashboardService.updateDashboardWithBill(bill, incentiveResult);
+      // Update dashboard with bill data including incentives - only for COMPLETED bills
+      if (bill.billStatus === 'COMPLETED') {
+        await dashboardService.updateDashboardWithBill(bill, incentiveResult);
+      } else {
+        console.log(`⏸️  Bill ${bill.billNumber} has status '${bill.billStatus}' - skipping dashboard update`);
+      }
 
       res.status(200).json({
         success: true,

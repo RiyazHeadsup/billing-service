@@ -14,14 +14,18 @@ const taskIntervalSchema = new mongoose.Schema({
   end: {
     type: Number
   },
-  taskEvidenceUrl: {
-    type: String,
-    trim: true
-  },
   status: {
     type: String,
     enum: Object.values(IntervalStatus),
     default: IntervalStatus.PENDING
+  },
+  interval: {
+    type: String,
+    trim: true
+  },
+  taskEvidenceUrl: {
+    type: String,
+    trim: true
   }
 }, { _id: false });
 
@@ -30,22 +34,6 @@ const taskSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  taskIntervals: {
-    type: [taskIntervalSchema],
-    default: []
-  },
-  roleId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'roles'
-  },
-  unitIds: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Unit'
-  },
-  assignedTo: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'users'
-  }],
   description: {
     type: String,
     trim: true
@@ -58,10 +46,48 @@ const taskSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  startDateTime: {
+    type: Number,
+    default: null
+  },
+  endDateTime: {
+    type: Number,
+    default: null
+  },
+  taskIntervals: {
+    type: [taskIntervalSchema],
+    default: []
+  },
+  roleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'roles'
+  },
+  assignedTo: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'users'
+  }],
+  unitIds: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Unit'
+  },
   status: {
     type: String,
     trim: true
   },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'users'
+  },
+  upDatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'users'
+  },
+  weekDaysForMonthly: [{
+    type: Number
+  }],
+  monthWeeks: [{
+    type: Number
+  }],
   createdAt: {
     type: Number
   },
