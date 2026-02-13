@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.29",
     "consul": "^0.40.0",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",

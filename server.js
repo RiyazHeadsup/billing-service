@@ -18,7 +18,7 @@ const incentiveRoutes = require('./routes/incentiveRoutes');
 const incentiveProgramRoutes = require('./routes/incentiveProgramRoutes');
 
 const app = express();
-const PORT = parseInt(process.env.PORT) || 3004;
+const PORT = parseInt(process.env.PORT) || 5001;
 
 app.use(express.json());
 

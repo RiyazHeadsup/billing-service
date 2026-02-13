@@ -304,11 +304,49 @@ class BillController {
       if (!_id) {
         return res.status(400).json({ error: 'Bill ID is required' });
       }
-      
-      const bill = await Bill.findByIdAndUpdate(_id, req.body, { new: true });
-      if (!bill) {
+
+      // Get the existing bill to check previous status
+      const existingBill = await Bill.findById(_id);
+      if (!existingBill) {
         return res.status(404).json({ error: 'Bill not found' });
       }
+
+      const previousStatus = existingBill.billStatus;
+
+      const bill = await Bill.findByIdAndUpdate(_id, req.body, { new: true });
+
+      // Process memberships if they're being added
+      if (req.body.newMemberships && req.body.newMemberships.length > 0) {
+        await createClientMemberships(req.body.newMemberships, req.body.client.id || bill.client.id || bill.client._id, req.body.createdBy || bill.createdBy);
+      }
+
+      // Handle wallet deduction if wallet payment is being made
+      if (req.body.payment && req.body.payment.methods && req.body.payment.methods.wallet > 0) {
+        await deductFromUserWallet(req.body.client.id || bill.client.id || bill.client._id, req.body.payment.methods.wallet, bill, req.body.createdBy || bill.createdBy);
+      }
+
+      // Create incentive records for services with incentive percentage
+      let incentiveResult = null;
+      if (req.body.services && req.body.services.length > 0) {
+        incentiveResult = await createIncentiveRecords(req.body.services, bill);
+        if (incentiveResult.success) {
+          console.log(`✅ Incentive records created successfully: ${incentiveResult.createdIncentives.length} incentives totaling ₹${incentiveResult.totalIncentiveAmount.toFixed(2)}`);
+        } else {
+          console.error('❌ Incentive record creation failed:', incentiveResult.error);
+        }
+      }
+
+      // Update dashboard if bill status is now COMPLETED (either was COMPLETED before or just changed to COMPLETED)
+      if (bill.billStatus === 'COMPLETED') {
+        // Only update dashboard if status changed from non-COMPLETED to COMPLETED, or if it was already COMPLETED
+        if (previousStatus !== 'COMPLETED' || existingBill.billStatus === 'COMPLETED') {
+          await dashboardService.updateDashboardWithBill(bill, incentiveResult);
+          console.log(`📊 Dashboard updated for bill ${bill.billNumber} with status ${bill.billStatus}`);
+        }
+      } else {
+        console.log(`⏸️  Bill ${bill.billNumber} has status '${bill.billStatus}' - skipping dashboard update`);
+      }
+
       res.json({ statusCode: 200, data: bill });
     } catch (error) {
       res.status(400).json({ error: error.message });
