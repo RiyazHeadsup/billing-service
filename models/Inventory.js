@@ -5,7 +5,7 @@ const inventorySchema = new mongoose.Schema({
   productId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    unique: true
+    required: true
   },
   qty: {
     type: Number
@@ -18,6 +18,21 @@ const inventorySchema = new mongoose.Schema({
     ref: 'Unit',
     required: false
   },
+  categoryId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    required: false
+  },
+  subCategoryId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SubCategory',
+    required: false
+  },
+  serviceIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service',
+    required: false
+  }],
   stockIn: {
     type: Number
   },
@@ -32,7 +47,7 @@ const inventorySchema = new mongoose.Schema({
     type: String,
     trim: true
   }
-}, { 
+}, {
   timestamps: true,
   collection: 'inventory'
 });

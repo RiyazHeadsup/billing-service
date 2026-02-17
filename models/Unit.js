@@ -39,6 +39,11 @@ const unitSchema = new mongoose.Schema({
   gstPercentage: {
     type: Number,
     default: 18
+  },
+  serviceGroupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    required: false
   }
 }, { timestamps: true });
 

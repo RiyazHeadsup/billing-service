@@ -3,6 +3,9 @@ const ClientMembership = require('../models/ClientMembership');
 const Wallet = require('../models/Wallet');
 const WalletTransaction = require('../models/WalletTransaction');
 const Incentive = require('../models/Incentive');
+const Inventory = require('../models/Inventory');
+const InventoryTransaction = require('../models/InventoryTransaction');
+const Service = require('../models/Service');
 const dashboardService = require('../services/dashboardService');
 
 async function createClientMemberships(newMemberships, clientId, createdBy) {
@@ -241,6 +244,200 @@ async function createIncentiveRecords(services, billData) {
   }
 }
 
+async function reduceInventoryForServices(services, billData) {
+  try {
+    console.log('=== INVENTORY REDUCTION FOR SERVICES START ===');
+    console.log(`Bill Number: ${billData.billNumber}`);
+    console.log(`Total Services: ${services.length}`);
+
+    const updatedInventories = [];
+    const createdTransactions = [];
+    const unitId = billData.unitId || billData.business?.unitId;
+
+    for (const billService of services) {
+      const serviceId = billService.id;
+      const serviceQuantity = billService.quantity || 1;
+
+      if (!serviceId) {
+        console.log(`Skipping service without ID: ${billService.name}`);
+        continue;
+      }
+
+      // Fetch the service to get product information
+      const service = await Service.findById(serviceId);
+
+      if (!service) {
+        console.log(`⚠️ Service not found: ${billService.name} (ID: ${serviceId})`);
+        continue;
+      }
+
+      // Check if service requires product
+      if (!service.isProductRequired || !service.productId) {
+        console.log(`Service ${service.name} does not require product, skipping inventory`);
+        continue;
+      }
+
+      const productId = service.productId;
+
+      // Find inventory for this product and unit
+      const inventory = await Inventory.findOne({
+        productId: productId,
+        unitIds: unitId
+      });
+
+      if (!inventory) {
+        console.log(`⚠️ Inventory not found for product (ID: ${productId}) at unit: ${unitId}`);
+        continue;
+      }
+
+      // Calculate quantity to reduce (service quantity * product qty per service if defined)
+      const productQtyPerService = 1; // Default 1 product per service
+      const totalQtyToReduce = serviceQuantity * productQtyPerService;
+
+      const previousQty = inventory.qty || 0;
+      const newQty = previousQty - totalQtyToReduce;
+
+      // Update inventory quantity
+      inventory.qty = newQty;
+      inventory.stockOut = (inventory.stockOut || 0) + totalQtyToReduce;
+      await inventory.save();
+
+      updatedInventories.push(inventory);
+
+      // Create inventory transaction
+      const transaction = new InventoryTransaction({
+        inventoryId: inventory._id,
+        productId: productId,
+        unitIds: unitId,
+        transactionType: 'OUT',
+        qty: totalQtyToReduce,
+        previousQty: previousQty,
+        newQty: newQty,
+        reason: `Used in service: ${service.name} for bill: ${billData.billNumber}`,
+        referenceId: billData._id.toString(),
+        referenceType: 'SALE',
+        createdBy: billData.createdBy
+      });
+
+      await transaction.save();
+      createdTransactions.push(transaction);
+
+      console.log(`--- Inventory Reduced ---`);
+      console.log(`Service: ${service.name} (ID: ${serviceId})`);
+      console.log(`Product ID: ${productId}`);
+      console.log(`Service Quantity: ${serviceQuantity}`);
+      console.log(`Total Qty Reduced: ${totalQtyToReduce}`);
+      console.log(`Previous Qty: ${previousQty}`);
+      console.log(`New Qty: ${newQty}`);
+      console.log(`Transaction ID: ${transaction._id}`);
+    }
+
+    console.log(`--- INVENTORY REDUCTION SUMMARY ---`);
+    console.log(`Inventories Updated: ${updatedInventories.length}`);
+    console.log(`Transactions Created: ${createdTransactions.length}`);
+    console.log('=== INVENTORY REDUCTION FOR SERVICES END ===');
+
+    return {
+      success: true,
+      updatedInventories: updatedInventories,
+      createdTransactions: createdTransactions,
+      billNumber: billData.billNumber
+    };
+  } catch (error) {
+    console.error('Error reducing inventory for services:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+async function reduceInventoryForProducts(products, billData) {
+  try {
+    console.log('=== INVENTORY REDUCTION FOR PRODUCTS START ===');
+    console.log(`Bill Number: ${billData.billNumber}`);
+    console.log(`Total Products: ${products.length}`);
+
+    const updatedInventories = [];
+    const createdTransactions = [];
+    const unitId = billData.unitId || billData.business?.unitId;
+
+    for (const billProduct of products) {
+      const productId = billProduct.id;
+      const productQuantity = billProduct.quantity || 1;
+
+      if (!productId) {
+        console.log(`Skipping product without ID: ${billProduct.name}`);
+        continue;
+      }
+
+      // Find inventory for this product and unit
+      const inventory = await Inventory.findOne({
+        productId: productId,
+        unitIds: unitId
+      });
+
+      if (!inventory) {
+        console.log(`⚠️ Inventory not found for product: ${billProduct.name} (ID: ${productId}) at unit: ${unitId}`);
+        continue;
+      }
+
+      const previousQty = inventory.qty || 0;
+      const newQty = previousQty - productQuantity;
+
+      // Update inventory quantity
+      inventory.qty = newQty;
+      inventory.stockOut = (inventory.stockOut || 0) + productQuantity;
+      await inventory.save();
+
+      updatedInventories.push(inventory);
+
+      // Create inventory transaction
+      const transaction = new InventoryTransaction({
+        inventoryId: inventory._id,
+        productId: productId,
+        unitIds: unitId,
+        transactionType: 'OUT',
+        qty: productQuantity,
+        previousQty: previousQty,
+        newQty: newQty,
+        reason: `Product sold in bill: ${billData.billNumber}`,
+        referenceId: billData._id.toString(),
+        referenceType: 'SALE',
+        createdBy: billData.createdBy
+      });
+
+      await transaction.save();
+      createdTransactions.push(transaction);
+
+      console.log(`--- Inventory Reduced ---`);
+      console.log(`Product: ${billProduct.name} (ID: ${productId})`);
+      console.log(`Quantity Sold: ${productQuantity}`);
+      console.log(`Previous Qty: ${previousQty}`);
+      console.log(`New Qty: ${newQty}`);
+      console.log(`Transaction ID: ${transaction._id}`);
+    }
+
+    console.log(`--- INVENTORY REDUCTION SUMMARY ---`);
+    console.log(`Inventories Updated: ${updatedInventories.length}`);
+    console.log(`Transactions Created: ${createdTransactions.length}`);
+    console.log('=== INVENTORY REDUCTION FOR PRODUCTS END ===');
+
+    return {
+      success: true,
+      updatedInventories: updatedInventories,
+      createdTransactions: createdTransactions,
+      billNumber: billData.billNumber
+    };
+  } catch (error) {
+    console.error('Error reducing inventory for products:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 class BillController {
   async createBill(req, res) {
     try {
@@ -263,6 +460,28 @@ class BillController {
           console.log(`✅ Incentive records created successfully: ${incentiveResult.createdIncentives.length} incentives totaling ₹${incentiveResult.totalIncentiveAmount.toFixed(2)}`);
         } else {
           console.error('❌ Incentive record creation failed:', incentiveResult.error);
+        }
+      }
+
+      // Reduce inventory for services that require products - only for COMPLETED bills
+      let serviceInventoryResult = null;
+      if (bill.billStatus === 'COMPLETED' && req.body.services && req.body.services.length > 0) {
+        serviceInventoryResult = await reduceInventoryForServices(req.body.services, bill);
+        if (serviceInventoryResult.success) {
+          console.log(`✅ Service inventory reduced: ${serviceInventoryResult.updatedInventories.length} products updated`);
+        } else {
+          console.error('❌ Service inventory reduction failed:', serviceInventoryResult.error);
+        }
+      }
+
+      // Reduce inventory for products sold directly - only for COMPLETED bills
+      let productInventoryResult = null;
+      if (bill.billStatus === 'COMPLETED' && req.body.products && req.body.products.length > 0) {
+        productInventoryResult = await reduceInventoryForProducts(req.body.products, bill);
+        if (productInventoryResult.success) {
+          console.log(`✅ Product inventory reduced: ${productInventoryResult.updatedInventories.length} products updated`);
+        } else {
+          console.error('❌ Product inventory reduction failed:', productInventoryResult.error);
         }
       }
 
@@ -333,6 +552,30 @@ class BillController {
           console.log(`✅ Incentive records created successfully: ${incentiveResult.createdIncentives.length} incentives totaling ₹${incentiveResult.totalIncentiveAmount.toFixed(2)}`);
         } else {
           console.error('❌ Incentive record creation failed:', incentiveResult.error);
+        }
+      }
+
+      // Reduce inventory for services - only when status changes to COMPLETED
+      let serviceInventoryResult = null;
+      const servicesToProcess = req.body.services || bill.services;
+      if (bill.billStatus === 'COMPLETED' && previousStatus !== 'COMPLETED' && servicesToProcess && servicesToProcess.length > 0) {
+        serviceInventoryResult = await reduceInventoryForServices(servicesToProcess, bill);
+        if (serviceInventoryResult.success) {
+          console.log(`✅ Service inventory reduced: ${serviceInventoryResult.updatedInventories.length} products updated`);
+        } else {
+          console.error('❌ Service inventory reduction failed:', serviceInventoryResult.error);
+        }
+      }
+
+      // Reduce inventory for products - only when status changes to COMPLETED
+      let productInventoryResult = null;
+      const productsToProcess = req.body.products || bill.products;
+      if (bill.billStatus === 'COMPLETED' && previousStatus !== 'COMPLETED' && productsToProcess && productsToProcess.length > 0) {
+        productInventoryResult = await reduceInventoryForProducts(productsToProcess, bill);
+        if (productInventoryResult.success) {
+          console.log(`✅ Product inventory reduced: ${productInventoryResult.updatedInventories.length} products updated`);
+        } else {
+          console.error('❌ Product inventory reduction failed:', productInventoryResult.error);
         }
       }
 
