@@ -2,11 +2,9 @@ const Bill = require('../models/Bill');
 const ClientMembership = require('../models/ClientMembership');
 const Wallet = require('../models/Wallet');
 const WalletTransaction = require('../models/WalletTransaction');
-const Incentive = require('../models/Incentive');
 const Inventory = require('../models/Inventory');
 const InventoryTransaction = require('../models/InventoryTransaction');
 const Service = require('../models/Service');
-const dashboardService = require('../services/dashboardService');
 
 async function createClientMemberships(newMemberships, clientId, createdBy) {
   try {
@@ -165,85 +163,6 @@ async function deductFromUserWallet(clientId, walletAmount, bill, createdBy) {
   }
 }
 
-async function createIncentiveRecords(services, billData) {
-  try {
-    console.log('=== INCENTIVE CREATION START ===');
-    console.log(`Bill Number: ${billData.billNumber}`);
-    console.log(`Transaction ID: ${billData.transactionId}`);
-    console.log(`Total Services: ${services.length}`);
-    
-    const createdIncentives = [];
-    let totalIncentiveAmount = 0;
-    
-    for (const service of services) {
-      if (service.incentive && service.incentive > 0 && service.staff) {
-        // Calculate incentive amount based on final price
-        const incentivePercentage = service.incentive;
-        const finalPrice = service.pricing.finalPrice;
-        const incentiveAmount = (finalPrice * incentivePercentage) / 100;
-        
-        // Create Incentive record
-        const incentiveData = {
-          billId: billData._id,
-          billNumber: billData.billNumber,
-          transactionId: billData.transactionId,
-          serviceId: service.id,
-          serviceName: service.name,
-          staffId: service.staff,
-          clientId: billData.client.id || billData.client._id,
-          finalPrice: finalPrice,
-          incentivePercentage: incentivePercentage,
-          incentiveAmount: incentiveAmount,
-          quantity: service.quantity || 1,
-          status: 'pending',
-          unitId: billData?.unitId,
-          businessDate: new Date(),
-          notes: `Auto-generated incentive from bill ${billData.billNumber}`,
-          createdBy: billData.createdBy
-        };
-        
-        const incentive = new Incentive(incentiveData);
-        await incentive.save();
-        
-        createdIncentives.push(incentive);
-        totalIncentiveAmount += incentiveAmount;
-        
-        console.log(`--- Incentive Created ---`);
-        console.log(`Incentive ID: ${incentive._id}`);
-        console.log(`Service: ${service.name} (ID: ${service.id})`);
-        console.log(`Staff ID: ${service.staff}`);
-        console.log(`Final Price: ₹${finalPrice}`);
-        console.log(`Incentive %: ${incentivePercentage}%`);
-        console.log(`Incentive Amount: ₹${incentiveAmount.toFixed(2)}`);
-        console.log(`Status: ${incentive.status}`);
-        console.log(`Quantity: ${service.quantity}`);
-      }
-    }
-    
-    console.log(`--- INCENTIVE CREATION SUMMARY ---`);
-    console.log(`Total Incentives Created: ${createdIncentives.length}`);
-    console.log(`Total Incentive Amount: ₹${totalIncentiveAmount.toFixed(2)}`);
-    console.log(`Client: ${billData.client.name} (${billData.client.phoneNumber})`);
-    console.log(`Payment Method: ${billData.payment.activePaymentMethods.map(pm => pm.method).join(', ')}`);
-    console.log(`Bill Total: ₹${billData.calculations.totals.finalAmount}`);
-    console.log('=== INCENTIVE CREATION END ===');
-    
-    return {
-      success: true,
-      createdIncentives: createdIncentives,
-      totalIncentiveAmount: totalIncentiveAmount,
-      billNumber: billData.billNumber,
-      transactionId: billData.transactionId
-    };
-  } catch (error) {
-    console.error('Error creating incentive records:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
 async function reduceInventoryForServices(services, billData) {
   try {
     console.log('=== INVENTORY REDUCTION FOR SERVICES START ===');
@@ -277,6 +196,12 @@ async function reduceInventoryForServices(services, billData) {
         continue;
       }
 
+      // Check if inventory reduction is enabled for this service
+      if (service.reduceInventoryOnBilling === false) {
+        console.log(`Service ${service.name} has inventory reduction disabled, skipping`);
+        continue;
+      }
+
       const productId = service.productId;
 
       // Find inventory for this product and unit
@@ -290,8 +215,8 @@ async function reduceInventoryForServices(services, billData) {
         continue;
       }
 
-      // Calculate quantity to reduce (service quantity * product qty per service if defined)
-      const productQtyPerService = 1; // Default 1 product per service
+      // Calculate quantity to reduce (service quantity * product qty per service)
+      const productQtyPerService = service.productQty || 1;
       const totalQtyToReduce = serviceQuantity * productQtyPerService;
 
       const previousQty = inventory.qty || 0;
@@ -452,17 +377,6 @@ class BillController {
         await deductFromUserWallet(req.body.client.id, req.body.payment.methods.wallet, bill, req.body.createdBy);
       }
 
-      // Create incentive records for services with incentive percentage
-      let incentiveResult = null;
-      if (req.body.services && req.body.services.length > 0) {
-        incentiveResult = await createIncentiveRecords(req.body.services, bill);
-        if (incentiveResult.success) {
-          console.log(`✅ Incentive records created successfully: ${incentiveResult.createdIncentives.length} incentives totaling ₹${incentiveResult.totalIncentiveAmount.toFixed(2)}`);
-        } else {
-          console.error('❌ Incentive record creation failed:', incentiveResult.error);
-        }
-      }
-
       // Reduce inventory for services that require products - only for COMPLETED bills
       let serviceInventoryResult = null;
       if (bill.billStatus === 'COMPLETED' && req.body.services && req.body.services.length > 0) {
@@ -483,13 +397,6 @@ class BillController {
         } else {
           console.error('❌ Product inventory reduction failed:', productInventoryResult.error);
         }
-      }
-
-      // Update dashboard with bill data including incentives - only for COMPLETED bills
-      if (bill.billStatus === 'COMPLETED') {
-        await dashboardService.updateDashboardWithBill(bill, incentiveResult);
-      } else {
-        console.log(`⏸️  Bill ${bill.billNumber} has status '${bill.billStatus}' - skipping dashboard update`);
       }
 
       res.status(200).json({
@@ -544,17 +451,6 @@ class BillController {
         await deductFromUserWallet(req.body.client.id || bill.client.id || bill.client._id, req.body.payment.methods.wallet, bill, req.body.createdBy || bill.createdBy);
       }
 
-      // Create incentive records for services with incentive percentage
-      let incentiveResult = null;
-      if (req.body.services && req.body.services.length > 0) {
-        incentiveResult = await createIncentiveRecords(req.body.services, bill);
-        if (incentiveResult.success) {
-          console.log(`✅ Incentive records created successfully: ${incentiveResult.createdIncentives.length} incentives totaling ₹${incentiveResult.totalIncentiveAmount.toFixed(2)}`);
-        } else {
-          console.error('❌ Incentive record creation failed:', incentiveResult.error);
-        }
-      }
-
       // Reduce inventory for services - only when status changes to COMPLETED
       let serviceInventoryResult = null;
       const servicesToProcess = req.body.services || bill.services;
@@ -577,17 +473,6 @@ class BillController {
         } else {
           console.error('❌ Product inventory reduction failed:', productInventoryResult.error);
         }
-      }
-
-      // Update dashboard if bill status is now COMPLETED (either was COMPLETED before or just changed to COMPLETED)
-      if (bill.billStatus === 'COMPLETED') {
-        // Only update dashboard if status changed from non-COMPLETED to COMPLETED, or if it was already COMPLETED
-        if (previousStatus !== 'COMPLETED' || existingBill.billStatus === 'COMPLETED') {
-          await dashboardService.updateDashboardWithBill(bill, incentiveResult);
-          console.log(`📊 Dashboard updated for bill ${bill.billNumber} with status ${bill.billStatus}`);
-        }
-      } else {
-        console.log(`⏸️  Bill ${bill.billNumber} has status '${bill.billStatus}' - skipping dashboard update`);
       }
 
       res.json({ statusCode: 200, data: bill });

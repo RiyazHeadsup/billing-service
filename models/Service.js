@@ -178,6 +178,24 @@ const serviceSchema = new mongoose.Schema({
     ref: 'Inventory',
     required: false
   },
+  productQty: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  reduceInventoryOnBilling: {
+    type: Boolean,
+    default: true
+  },
+  isMultiSession: {
+    type: Boolean,
+    default: false
+  },
+  numberOfSessions: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
   serviceParentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Service',

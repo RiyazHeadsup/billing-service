@@ -16,6 +16,8 @@ const accountRoutes = require('./routes/accountRoutes');
 const accountTransactionRoutes = require('./routes/accountTransactionRoutes');
 const incentiveRoutes = require('./routes/incentiveRoutes');
 const incentiveProgramRoutes = require('./routes/incentiveProgramRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 const PORT = parseInt(process.env.PORT) || 5001;
@@ -41,6 +43,8 @@ app.use('/', accountRoutes);
 app.use('/', accountTransactionRoutes);
 app.use('/', incentiveRoutes);
 app.use('/', incentiveProgramRoutes);
+app.use('/', bookingRoutes);
+app.use('/', paymentRoutes);
 
 async function startServer() {
   try {
@@ -124,7 +128,29 @@ async function startServer() {
       console.log(`   POST /activateIncentiveProgram - Activate incentive program`);
       console.log(`   POST /deactivateIncentiveProgram - Deactivate incentive program`);
       console.log(`   POST /getIncentiveProgramStats - Get incentive program statistics`);
-      
+      console.log(`   POST /addToCart - Add booking to cart`);
+      console.log(`   POST /getCart - Get cart items for client`);
+      console.log(`   POST /updateCart - Update cart item`);
+      console.log(`   POST /removeFromCart - Remove item from cart`);
+      console.log(`   POST /clearCart - Clear client cart`);
+      console.log(`   POST /bookFromCart - Confirm bookings from cart`);
+      console.log(`   POST /addBooking - Create booking directly`);
+      console.log(`   POST /searchBooking - Search bookings`);
+      console.log(`   POST /updateBooking - Update booking`);
+      console.log(`   POST /deleteBooking - Delete booking`);
+      console.log(`   POST /getBookingByNumber - Get booking by number`);
+      console.log(`   POST /getBookingsByClient - Get bookings by client`);
+      console.log(`   POST /cancelBooking - Cancel booking`);
+      console.log(`   POST /rescheduleBooking - Reschedule booking`);
+      console.log(`   POST /completeBooking - Complete booking`);
+      console.log(`   POST /initiatePayment - Initiate Paytm payment`);
+      console.log(`   POST /initiateBookingPayment - Initiate payment for bookings`);
+      console.log(`   POST /paymentCallback - Paytm payment callback`);
+      console.log(`   POST /getPaymentStatus - Check payment status`);
+      console.log(`   POST /searchPayment - Search payments`);
+      console.log(`   POST /getPaymentsByClient - Get payments by client`);
+      console.log(`   POST /initiateRefund - Initiate refund`);
+
       await consulConfig.registerService();
     });
   } catch (error) {
