@@ -366,6 +366,69 @@ async function reduceInventoryForProducts(products, billData) {
 class BillController {
   async createBill(req, res) {
     try {
+      // Check for overlapping appointments for the same staff on the same date
+      if (req.body.billType === 'APPOINTMENT' && req.body.slotStart && req.body.slotEnd && req.body.services) {
+        const staffIds = req.body.services
+          .map(s => s.staff)
+          .filter(Boolean);
+
+        if (staffIds.length > 0 && req.body.date) {
+          const startOfDay = new Date(req.body.date);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(req.body.date);
+          endOfDay.setHours(23, 59, 59, 999);
+
+          const existingAppointments = await Bill.find({
+            billType: 'APPOINTMENT',
+            status: { $ne: 'cancelled' },
+            'services.staff': { $in: staffIds },
+            date: { $gte: startOfDay.getTime(), $lte: endOfDay.getTime() },
+            slotStart: { $exists: true },
+            slotEnd: { $exists: true }
+          });
+
+          const parseBillTime = (timeStr) => {
+            if (!timeStr) return null;
+            let str = timeStr.toLowerCase().trim();
+            let hours = 0, minutes = 0;
+            if (str.includes('am') || str.includes('pm')) {
+              const isPM = str.includes('pm');
+              str = str.replace(/am|pm/gi, '').trim();
+              const parts = str.split(':');
+              hours = parseInt(parts[0]);
+              minutes = parseInt(parts[1] || '0');
+              if (isPM && hours !== 12) hours += 12;
+              else if (!isPM && hours === 12) hours = 0;
+            } else {
+              const parts = str.split(':');
+              hours = parseInt(parts[0]);
+              minutes = parseInt(parts[1] || '0');
+            }
+            return hours * 60 + minutes;
+          };
+
+          const newStart = parseBillTime(req.body.slotStart);
+          const newEnd = parseBillTime(req.body.slotEnd);
+
+          if (newStart !== null && newEnd !== null) {
+            const overlap = existingAppointments.some(apt => {
+              const existStart = parseBillTime(apt.slotStart);
+              const existEnd = parseBillTime(apt.slotEnd);
+              if (existStart === null || existEnd === null) return false;
+              return newStart < existEnd && newEnd > existStart;
+            });
+
+            if (overlap) {
+              return res.status(200).json({
+                success: false,
+                message: 'This time slot overlaps with an existing appointment for this staff member',
+                statusCode: 409
+              });
+            }
+          }
+        }
+      }
+
       const bill = new Bill(req.body);
       await bill.save();
 

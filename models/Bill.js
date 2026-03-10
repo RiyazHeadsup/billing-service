@@ -366,6 +366,12 @@ const billSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Unit'
   },
+  slotStart: {
+    type: String
+  },
+  slotEnd: {
+    type: String
+  },
   domainId: String,
   collab: [{
     type: String,
