@@ -5,7 +5,7 @@ set -e
 
 # Configuration
 IMAGE_NAME="hcorptech/billing-service-elevate"
-VERSION="0.0.1"
+VERSION="0.0.5"
 PLATFORM="linux/amd64"
 
 echo "🚀 Building and pushing Docker image: ${IMAGE_NAME}:${VERSION}"

@@ -44,6 +44,20 @@ const unitSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Group',
     required: false
+  },
+  appServiceGroupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    required: false
+  },
+  appMaintenanceMode: {
+    type: Boolean,
+    default: false
+  },
+  appMaintenanceMessage: {
+    type: String,
+    trim: true,
+    default: ''
   }
 }, { timestamps: true });
 

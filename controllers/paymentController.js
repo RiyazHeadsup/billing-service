@@ -1,5 +1,6 @@
 const Payment = require('../models/Payment');
 const Booking = require('../models/Booking');
+const Bill = require('../models/Bill');
 const paytmService = require('../services/paytmService');
 
 class PaymentController {
@@ -71,7 +72,7 @@ class PaymentController {
   // Initiate payment for booking (from cart flow)
   async initiateBookingPayment(req, res) {
     try {
-      const { clientId, bookingIds, amount, unitId, createdBy, bookingDate, bookingTime, scheduledDate, scheduledTime, serviceType } = req.body;
+      const { clientId, bookingIds, amount, unitId, createdBy, bookingDate, bookingTime, scheduledDate, scheduledTime, serviceType, address } = req.body;
 
       if (!clientId || !amount) {
         return res.status(400).json({ error: 'clientId and amount are required' });
@@ -103,24 +104,24 @@ class PaymentController {
 
       const orderId = paytmService.generateOrderId('BKG');
 
-      // Mark bookings as PENDING payment and set schedule details
+      // Save schedule details on bookings but keep them IN_CART until payment succeeds
       for (const booking of bookings) {
-        booking.bookingStatus = 'PENDING';
-        booking.status = 'pending';
         if (bookingDate) booking.bookingDate = bookingDate;
         if (bookingTime) booking.bookingTime = bookingTime;
         if (scheduledDate) booking.scheduledDate = scheduledDate;
         if (scheduledTime) booking.scheduledTime = scheduledTime;
         if (serviceType) booking.serviceType = serviceType;
+        if (address) booking.address = address;
         await booking.save();
       }
 
-      // Create payment record linked to first booking (or use array)
+      // Create payment record linked to all bookings
       const payment = new Payment({
         orderId,
         clientId,
         amount,
         bookingId: bookings[0]._id,
+        bookingIds: bookings.map(b => b._id),
         unitId: unitId || null,
         createdBy: createdBy || null,
         remarks: `Payment for ${bookings.length} booking(s): ${bookings.map(b => b.bookingNumber).join(', ')}`,
@@ -150,13 +151,6 @@ class PaymentController {
           }
         });
       } else {
-        // Revert bookings back to IN_CART
-        for (const booking of bookings) {
-          booking.bookingStatus = 'IN_CART';
-          booking.status = 'in_cart';
-          await booking.save();
-        }
-
         payment.paymentStatus = 'TXN_FAILURE';
         payment.gatewayResponse = {
           respCode: paytmResponse.body?.resultInfo?.resultCode,
@@ -184,6 +178,25 @@ class PaymentController {
 
       console.log(`Payment callback received for order: ${orderId}, status: ${txnStatus}`);
 
+      // Verify Paytm checksum signature to prevent forged callbacks
+      const checksumHash = callbackData.CHECKSUMHASH;
+      if (checksumHash) {
+        // PaytmChecksum.verifySignature removes CHECKSUMHASH internally before verifying
+        const isValid = await paytmService.verifySignature(callbackData, checksumHash);
+        if (!isValid) {
+          console.error(`Invalid checksum for order: ${orderId}`);
+          return res.status(403).json({ error: 'Invalid checksum. Callback rejected.' });
+        }
+      } else {
+        // No checksum provided — verify with Paytm gateway directly
+        const gatewayCheck = await paytmService.getTransactionStatus(orderId);
+        const gatewayStatus = gatewayCheck.body?.resultInfo?.resultStatus;
+        if (gatewayStatus !== txnStatus) {
+          console.error(`Status mismatch for order ${orderId}: callback=${txnStatus}, gateway=${gatewayStatus}`);
+          return res.status(403).json({ error: 'Payment status verification failed.' });
+        }
+      }
+
       const payment = await Payment.findOne({ orderId });
       if (!payment) {
         console.error(`Payment not found for order: ${orderId}`);
@@ -205,40 +218,26 @@ class PaymentController {
       };
       await payment.save();
 
-      // If payment succeeded, confirm linked booking(s)
+      // If payment succeeded, confirm only the single booking linked to this payment
       if (txnStatus === 'TXN_SUCCESS' && payment.bookingId) {
-        // Find all PENDING bookings for this client that were part of this payment
-        const booking = await Booking.findById(payment.bookingId);
-        if (booking) {
-          // Confirm all PENDING bookings for this client
-          await Booking.updateMany(
-            {
-              'client.id': payment.clientId,
-              bookingStatus: 'PENDING'
-            },
-            {
-              bookingStatus: 'CONFIRMED',
-              status: 'confirmed',
-              'payment.paymentStatus': 'Paid',
-              'payment.totalPaid': payment.amount,
-              'payment.activePaymentMethods': [{ method: payment.paymentMode || 'UPI', amount: payment.amount }]
-            }
-          );
-          console.log(`Bookings confirmed for client: ${payment.clientId}`);
-        }
-      } else if (txnStatus === 'TXN_FAILURE' && payment.bookingId) {
-        // Revert bookings back to IN_CART on failure
-        await Booking.updateMany(
-          {
-            'client.id': payment.clientId,
-            bookingStatus: 'PENDING'
-          },
-          {
-            bookingStatus: 'IN_CART',
-            status: 'in_cart'
-          }
-        );
-        console.log(`Bookings reverted to cart for client: ${payment.clientId}`);
+        await Booking.findByIdAndUpdate(payment.bookingId, {
+          bookingStatus: 'CONFIRMED',
+          status: 'confirmed',
+          paymentDone: true,
+          'payment.paymentStatus': 'Paid',
+          'payment.totalPaid': payment.amount,
+          'payment.activePaymentMethods': [{ method: payment.paymentMode || 'UPI', amount: payment.amount }]
+        });
+        console.log(`Booking ${payment.bookingId} confirmed for order: ${orderId}`);
+      }
+
+      // If payment succeeded and linked to a bill, mark app payment as completed
+      if (txnStatus === 'TXN_SUCCESS' && payment.billId) {
+        await Bill.findByIdAndUpdate(payment.billId, {
+          appPaymentCompleted: true,
+          'payment.paymentStatus': 'Paid',
+        });
+        console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
       }
 
       res.status(200).json({
@@ -287,25 +286,26 @@ class PaymentController {
         };
         await payment.save();
 
-        // Update booking statuses based on payment result
+        // On success, confirm only the single booking linked to this payment
         if (txnStatus === 'TXN_SUCCESS' && payment.bookingId) {
-          await Booking.updateMany(
-            { 'client.id': payment.clientId, bookingStatus: 'PENDING' },
-            {
-              bookingStatus: 'CONFIRMED',
-              status: 'confirmed',
-              'payment.paymentStatus': 'Paid',
-              'payment.totalPaid': payment.amount,
-              'payment.activePaymentMethods': [{ method: paytmResponse.body.paymentMode || 'ONLINE', amount: payment.amount }]
-            }
-          );
-          console.log(`Bookings confirmed for client: ${payment.clientId}, order: ${orderId}`);
-        } else if (txnStatus === 'TXN_FAILURE' && payment.bookingId) {
-          await Booking.updateMany(
-            { 'client.id': payment.clientId, bookingStatus: 'PENDING' },
-            { bookingStatus: 'IN_CART', status: 'in_cart' }
-          );
-          console.log(`Bookings reverted to cart for client: ${payment.clientId}, order: ${orderId}`);
+          await Booking.findByIdAndUpdate(payment.bookingId, {
+            bookingStatus: 'CONFIRMED',
+            status: 'confirmed',
+            paymentDone: true,
+            'payment.paymentStatus': 'Paid',
+            'payment.totalPaid': payment.amount,
+            'payment.activePaymentMethods': [{ method: paytmResponse.body.paymentMode || 'ONLINE', amount: payment.amount }]
+          });
+          console.log(`Booking ${payment.bookingId} confirmed for order: ${orderId}`);
+        }
+
+        // On success, mark bill app payment as completed
+        if (txnStatus === 'TXN_SUCCESS' && payment.billId) {
+          await Bill.findByIdAndUpdate(payment.billId, {
+            appPaymentCompleted: true,
+            'payment.paymentStatus': 'Paid',
+          });
+          console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
         }
       }
 
@@ -334,6 +334,21 @@ class PaymentController {
         ]
       };
       const payments = await Payment.paginate(req.body.search || {}, options);
+
+      // Lookup client names for all payments
+      const clientIds = [...new Set(payments.docs.map(p => p.clientId).filter(Boolean))];
+      if (clientIds.length > 0) {
+        const Client = require('../models/Client');
+        const clients = await Client.find({ _id: { $in: clientIds } }, 'name phoneNumber');
+        const clientMap = {};
+        clients.forEach(c => { clientMap[c._id.toString()] = { name: c.name, phoneNumber: c.phoneNumber }; });
+        payments.docs = payments.docs.map(p => {
+          const doc = p.toObject ? p.toObject() : p;
+          doc.clientInfo = clientMap[doc.clientId] || null;
+          return doc;
+        });
+      }
+
       res.json({ statusCode: 200, data: payments });
     } catch (error) {
       res.status(500).json({ error: error.message });

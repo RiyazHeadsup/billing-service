@@ -18,6 +18,8 @@ const incentiveRoutes = require('./routes/incentiveRoutes');
 const incentiveProgramRoutes = require('./routes/incentiveProgramRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const clientAddressRoutes = require('./routes/clientAddressRoutes');
+const walletOtpRoutes = require('./routes/walletOtpRoutes');
 
 const app = express();
 const PORT = parseInt(process.env.PORT) || 5001;
@@ -45,6 +47,8 @@ app.use('/', incentiveRoutes);
 app.use('/', incentiveProgramRoutes);
 app.use('/', bookingRoutes);
 app.use('/', paymentRoutes);
+app.use('/', clientAddressRoutes);
+app.use('/', walletOtpRoutes);
 
 async function startServer() {
   try {

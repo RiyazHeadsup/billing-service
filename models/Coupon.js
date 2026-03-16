@@ -78,6 +78,10 @@ const couponSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isAppCoupon: {
+    type: Boolean,
+    default: false
+  },
   unitIds: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Unit'

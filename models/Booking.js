@@ -28,12 +28,12 @@ const bookingSchema = new mongoose.Schema({
   },
   bookingStatus: {
     type: String,
-    enum: ['IN_CART', 'CONFIRMED', 'PENDING', 'CANCELLED', 'COMPLETED', 'NO_SHOW', 'RESCHEDULED'],
+    enum: ['IN_CART', 'CONFIRMED', 'PENDING', 'CANCELLED', 'COMPLETED', 'NO_SHOW', 'RESCHEDULED', 'IN_PROGRESS'],
     default: 'IN_CART'
   },
   status: {
     type: String,
-    enum: ['in_cart', 'confirmed', 'pending', 'cancelled', 'completed', 'no_show', 'rescheduled'],
+    enum: ['in_cart', 'confirmed', 'pending', 'cancelled', 'completed', 'no_show', 'rescheduled', 'in_progress'],
     default: 'in_cart'
   },
   client: {
@@ -152,6 +152,7 @@ const bookingSchema = new mongoose.Schema({
       ref: 'Service'
     },
     name: String,
+    img: String,
     quantity: {
       type: Number,
       default: 1
@@ -172,6 +173,32 @@ const bookingSchema = new mongoose.Schema({
     staff: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
+    },
+    assignedWindows: [{
+      start: String,
+      end: String
+    }],
+    isServiceStarted: {
+      type: Boolean,
+      default: false
+    },
+    serviceStartedAt: {
+      type: Date
+    },
+    serviceStartedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Staff'
+    },
+    serviceStartedLocation: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: [0, 0] }
+    },
+    isServiceCompleted: {
+      type: Boolean,
+      default: false
+    },
+    serviceCompletedAt: {
+      type: Date
     },
     incentive: Number
   }],
@@ -375,6 +402,13 @@ const bookingSchema = new mongoose.Schema({
     index: true
   }],
   address: {
+    _id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ClientAddress'
+    },
+    label: String,
+    type: String,
+    flat: String,
     fullAddress: String,
     landmark: String,
     city: String,
@@ -416,6 +450,21 @@ const bookingSchema = new mongoose.Schema({
   billId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Bill'
+  },
+  paymentDone: {
+    type: Boolean,
+    default: false
+  },
+  isAccepted: {
+    type: Boolean,
+    default: false
+  },
+  acceptedAt: {
+    type: Date
+  },
+  acceptedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true,

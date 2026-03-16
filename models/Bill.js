@@ -115,12 +115,16 @@ const billSchema = new mongoose.Schema({
       wallet: {
         type: Number,
         default: 0
+      },
+      app: {
+        type: Number,
+        default: 0
       }
     },
     activePaymentMethods: [{
       method: {
         type: String,
-        enum: ['CASH', 'CARD', 'UPI', 'WALLET']
+        enum: ['CASH', 'CARD', 'UPI', 'WALLET', 'APP']
       },
       amount: Number
     }],
@@ -285,6 +289,14 @@ const billSchema = new mongoose.Schema({
       },
       amountAfterRoundoff: Number
     }
+  },
+  appDiscount: {
+    type: Number,
+    default: 0
+  },
+  appPaymentCompleted: {
+    type: Boolean,
+    default: false
   },
   discounts: {
     hasDiscounts: {

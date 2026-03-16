@@ -2,11 +2,11 @@ const PaytmChecksum = require('paytmchecksum');
 
 class PaytmService {
   constructor() {
-    this.mid = process.env.PAYTM_MID;
-    this.merchantKey = process.env.PAYTM_MERCHANT_KEY;
+    this.mid = process.env.PAYTM_MID || 'fuAjHF73812575181306';
+    this.merchantKey = process.env.PAYTM_MERCHANT_KEY || 'wm7XOLVnfAhu2b7f';
     this.website = process.env.PAYTM_WEBSITE || 'DEFAULT';
     this.baseUrl = process.env.PAYTM_BASE_URL || 'https://secure.paytmpayments.com';
-    this.callbackUrl = process.env.PAYTM_CALLBACK_URL;
+    this.callbackUrl = process.env.PAYTM_CALLBACK_URL || 'https://app-api.elevatelifestyle.in/secure/paymentCallback';
   }
 
   async generateSignature(body) {
@@ -14,7 +14,9 @@ class PaytmService {
   }
 
   async verifySignature(body, receivedSignature) {
-    return PaytmChecksum.verifySignature(JSON.stringify(body), this.merchantKey, receivedSignature);
+    // Pass object directly — PaytmChecksum.verifySignature sorts keys internally
+    // JSON.stringify would break checksum verification for callback data
+    return PaytmChecksum.verifySignature(body, this.merchantKey, receivedSignature);
   }
 
   async initiateTransaction(orderId, amount, custId) {

@@ -9,7 +9,7 @@ router.post('/getCart', bookingController.getCart);
 router.post('/updateCart', bookingController.updateCart);
 router.post('/removeFromCart', bookingController.removeFromCart);
 router.post('/clearCart', bookingController.clearCart);
-router.post('/bookFromCart', bookingController.bookFromCart);
+
 
 // Booking CRUD
 router.post('/addBooking', bookingController.createBooking);
@@ -23,5 +23,7 @@ router.post('/getBookingsByClient', bookingController.getBookingsByClient);
 router.post('/cancelBooking', bookingController.cancelBooking);
 router.post('/rescheduleBooking', bookingController.rescheduleBooking);
 router.post('/completeBooking', bookingController.completeBooking);
+router.post('/acceptBooking', bookingController.acceptBooking);
+router.post('/updateServiceStatus', bookingController.updateServiceStatus);
 
 module.exports = router;

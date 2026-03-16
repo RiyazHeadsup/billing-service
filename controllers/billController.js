@@ -415,7 +415,12 @@ class BillController {
       const options = {
         page: parseInt(req.body.page) || 1,
         limit: parseInt(req.body.limit) || 10,
-        sort: req.body.sort || { createdAt: -1 }
+        sort: req.body.sort || { createdAt: -1 },
+        populate: [
+          { path: 'services.staff', select: 'name' },
+          { path: 'products.staff', select: 'name' },
+          { path: 'createdBy', select: 'name' },
+        ]
       };
       const bills = await Bill.paginate(req.body.search, options);
       res.json({ statusCode: 200, data: bills });
