@@ -128,7 +128,7 @@ const bookingSchema = new mongoose.Schema({
     activePaymentMethods: [{
       method: {
         type: String,
-        enum: ['CASH', 'CARD', 'UPI', 'WALLET']
+        enum: ['CASH', 'CARD', 'UPI', 'WALLET', 'SUBSCRIPTION']
       },
       amount: Number
     }],
@@ -157,6 +157,17 @@ const bookingSchema = new mongoose.Schema({
       type: Number,
       default: 1
     },
+    freeQty: {
+      type: Number,
+      default: 0
+    },
+    paidQty: Number,
+    coveredBySubscription: {
+      type: Boolean,
+      default: false
+    },
+    subscriptionId: String,
+    subscriptionName: String,
     pricing: {
       basePrice: Number,
       finalPrice: Number,
@@ -172,7 +183,7 @@ const bookingSchema = new mongoose.Schema({
     },
     staff: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'Staff'
     },
     assignedWindows: [{
       start: String,
@@ -313,6 +324,7 @@ const bookingSchema = new mongoose.Schema({
       totalDiscount: Number,
       grandTotal: Number,
       totalSavings: Number,
+      subscriptionSavings: Number,
       finalAmount: Number,
       roundoffValue: {
         type: Number,
@@ -402,22 +414,8 @@ const bookingSchema = new mongoose.Schema({
     index: true
   }],
   address: {
-    _id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'ClientAddress'
-    },
-    label: String,
-    type: String,
-    flat: String,
-    fullAddress: String,
-    landmark: String,
-    city: String,
-    state: String,
-    pincode: String,
-    coordinates: {
-      lat: Number,
-      lng: Number
-    }
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ClientAddress'
   },
   scheduledDate: {
     type: Date

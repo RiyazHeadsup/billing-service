@@ -20,6 +20,7 @@ const bookingRoutes = require('./routes/bookingRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const clientAddressRoutes = require('./routes/clientAddressRoutes');
 const walletOtpRoutes = require('./routes/walletOtpRoutes');
+const dayClosingRoutes = require('./routes/dayClosingRoutes');
 
 const app = express();
 const PORT = parseInt(process.env.PORT) || 5001;
@@ -49,6 +50,7 @@ app.use('/', bookingRoutes);
 app.use('/', paymentRoutes);
 app.use('/', clientAddressRoutes);
 app.use('/', walletOtpRoutes);
+app.use('/', dayClosingRoutes);
 
 async function startServer() {
   try {

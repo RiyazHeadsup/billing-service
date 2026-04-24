@@ -1,7 +1,87 @@
 const Payment = require('../models/Payment');
 const Booking = require('../models/Booking');
 const Bill = require('../models/Bill');
+const ClientSubscription = require('../models/ClientSubscription');
+const SubscriptionTransaction = require('../models/SubscriptionTransaction');
 const paytmService = require('../services/paytmService');
+
+// Auto-activate subscription after successful payment
+async function activateSubscription(payment, paymentMode) {
+  try {
+    if (!payment.subscriptionId || !payment.subscriptionMeta) return;
+
+    // Check if already activated (prevent duplicates)
+    const existing = await ClientSubscription.findOne({ paymentId: payment._id });
+    if (existing) return;
+
+    const meta = payment.subscriptionMeta;
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + (meta.durationInDays || 30));
+
+    const clientSub = new ClientSubscription({
+      clientId: payment.clientId,
+      subscriptionId: payment.subscriptionId,
+      planName: meta.planName,
+      planPrice: meta.planPrice,
+      taxAmount: meta.taxAmount || 0,
+      totalPaid: meta.totalAmount,
+      startDate,
+      endDate,
+      totalServicesAllowed: meta.totalServicesAllowed || -1,
+      serviceUsage: meta.serviceUsage || [],
+      complementaryUsage: meta.complementaryUsage || [],
+      status: 'active',
+      paymentId: payment._id,
+      paymentMethod: paymentMode || '',
+      transactionId: payment.transactionId,
+      unitId: payment.unitId || null,
+    });
+    await clientSub.save();
+    console.log(`Subscription activated for client ${payment.clientId}, plan: ${meta.planName}, orderId: ${payment.orderId}`);
+  } catch (err) {
+    console.error('Failed to activate subscription:', err.message);
+  }
+}
+
+// Deduct subscription usage and create transactions when booking is confirmed
+async function deductSubscriptionUsage(booking) {
+  try {
+    const services = booking.services || [];
+    for (const svc of services) {
+      if (!svc.coveredBySubscription || !svc.subscriptionId || !svc.freeQty) continue;
+
+      const clientSub = await ClientSubscription.findById(svc.subscriptionId);
+      if (!clientSub || clientSub.status !== 'active') continue;
+
+      // Deduct usage
+      await ClientSubscription.findByIdAndUpdate(svc.subscriptionId, {
+        $inc: { totalServicesUsed: svc.freeQty }
+      });
+
+      // Create transaction record
+      await SubscriptionTransaction.create({
+        clientSubscriptionId: clientSub._id,
+        clientId: clientSub.clientId,
+        subscriptionId: clientSub.subscriptionId,
+        type: 'service',
+        serviceId: svc.id,
+        serviceName: svc.name,
+        bookingId: booking._id,
+        servicePrice: svc.pricing?.basePrice || 0,
+        discountApplied: (svc.pricing?.basePrice || 0) * svc.freeQty,
+        freeQty: svc.freeQty,
+        unitId: booking.unitId || null,
+        status: 'completed',
+        remarks: `Redeemed ${svc.freeQty}x ${svc.name} via ${clientSub.planName}`,
+      });
+
+      console.log(`Subscription ${svc.subscriptionId}: deducted ${svc.freeQty}x ${svc.name} for booking ${booking._id}`);
+    }
+  } catch (err) {
+    console.error('Failed to deduct subscription usage:', err.message);
+  }
+}
 
 class PaymentController {
   // Initiate payment for any purpose (standalone)
@@ -169,6 +249,67 @@ class PaymentController {
     }
   }
 
+  // Initiate payment for subscription purchase
+  async initiateSubscriptionPayment(req, res) {
+    try {
+      const { clientId, subscriptionId, planName, planPrice, taxAmount, totalAmount, unitId, durationInDays, totalServicesAllowed, serviceUsage, complementaryUsage } = req.body;
+
+      if (!clientId || !subscriptionId || !totalAmount) {
+        return res.status(400).json({ error: 'clientId, subscriptionId, and totalAmount are required' });
+      }
+
+      const orderId = paytmService.generateOrderId('SUB');
+
+      const payment = new Payment({
+        orderId,
+        clientId,
+        amount: totalAmount,
+        unitId: unitId || null,
+        remarks: `Subscription: ${planName || subscriptionId}`,
+        paymentStatus: 'INITIATED',
+        subscriptionId,
+        subscriptionMeta: { planName, planPrice, taxAmount, totalAmount, durationInDays, totalServicesAllowed, serviceUsage, complementaryUsage }
+      });
+      await payment.save();
+
+      const paytmResponse = await paytmService.initiateTransaction(orderId, totalAmount, clientId);
+
+      if (paytmResponse.body && paytmResponse.body.resultInfo && paytmResponse.body.resultInfo.resultStatus === 'S') {
+        payment.txnToken = paytmResponse.body.txnToken;
+        await payment.save();
+
+        res.status(200).json({
+          success: true,
+          statusCode: 200,
+          message: 'Subscription payment initiated',
+          data: {
+            orderId,
+            txnToken: paytmResponse.body.txnToken,
+            amount: totalAmount,
+            mid: paytmService.mid,
+            callbackUrl: paytmService.callbackUrl,
+            paymentId: payment._id
+          }
+        });
+      } else {
+        payment.paymentStatus = 'TXN_FAILURE';
+        payment.gatewayResponse = {
+          respCode: paytmResponse.body?.resultInfo?.resultCode,
+          respMsg: paytmResponse.body?.resultInfo?.resultMsg
+        };
+        await payment.save();
+
+        res.status(400).json({
+          success: false,
+          message: 'Payment initiation failed',
+          error: paytmResponse.body?.resultInfo?.resultMsg || 'Unknown error'
+        });
+      }
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
   // Paytm callback handler
   async paymentCallback(req, res) {
     try {
@@ -229,6 +370,10 @@ class PaymentController {
           'payment.activePaymentMethods': [{ method: payment.paymentMode || 'UPI', amount: payment.amount }]
         });
         console.log(`Booking ${payment.bookingId} confirmed for order: ${orderId}`);
+
+        // Deduct subscription usage and create transactions
+        const confirmedBooking = await Booking.findById(payment.bookingId);
+        if (confirmedBooking) await deductSubscriptionUsage(confirmedBooking);
       }
 
       // If payment succeeded and linked to a bill, mark app payment as completed
@@ -238,6 +383,11 @@ class PaymentController {
           'payment.paymentStatus': 'Paid',
         });
         console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
+      }
+
+      // If subscription payment succeeded, auto-activate subscription
+      if (txnStatus === 'TXN_SUCCESS' && payment.subscriptionId) {
+        await activateSubscription(payment, callbackData.PAYMENTMODE);
       }
 
       res.status(200).json({
@@ -306,6 +456,11 @@ class PaymentController {
             'payment.paymentStatus': 'Paid',
           });
           console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
+        }
+
+        // On success, auto-activate subscription
+        if (txnStatus === 'TXN_SUCCESS' && payment.subscriptionId) {
+          await activateSubscription(payment, paytmResponse.body.paymentMode);
         }
       }
 

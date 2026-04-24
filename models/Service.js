@@ -223,6 +223,10 @@ const serviceSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  includeInSubscription: {
+    type: Boolean,
+    default: false
+  },
   isActive: {
     type: Boolean,
     default: true

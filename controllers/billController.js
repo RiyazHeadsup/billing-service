@@ -480,8 +480,8 @@ class BillController {
         limit: parseInt(req.body.limit) || 10,
         sort: req.body.sort || { createdAt: -1 },
         populate: [
-          { path: 'services.staff', select: 'name' },
-          { path: 'products.staff', select: 'name' },
+          { path: 'services.staff', select: 'name phoneNumber designation' },
+          { path: 'products.staff', select: 'name phoneNumber designation' },
           { path: 'createdBy', select: 'name' },
         ]
       };
@@ -503,6 +503,76 @@ class BillController {
       const existingBill = await Bill.findById(_id);
       if (!existingBill) {
         return res.status(404).json({ error: 'Bill not found' });
+      }
+
+      // Check overlap when rescheduling an appointment
+      const isReschedule = existingBill.billType === 'APPOINTMENT' &&
+        (req.body.slotStart || req.body.slotEnd || req.body.date) &&
+        req.body.billStatus !== 'CANCELLED';
+
+      if (isReschedule) {
+        const slotStart = req.body.slotStart || existingBill.slotStart;
+        const slotEnd = req.body.slotEnd || existingBill.slotEnd;
+        const apptDate = req.body.date || existingBill.date;
+        const services = req.body.services || existingBill.services;
+        const staffIds = (services || []).map(s => s.staff).filter(Boolean);
+
+        if (staffIds.length > 0 && slotStart && slotEnd && apptDate) {
+          const startOfDay = new Date(apptDate);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(apptDate);
+          endOfDay.setHours(23, 59, 59, 999);
+
+          const existingAppointments = await Bill.find({
+            _id: { $ne: _id },
+            billType: 'APPOINTMENT',
+            status: { $ne: 'cancelled' },
+            'services.staff': { $in: staffIds },
+            date: { $gte: startOfDay.getTime(), $lte: endOfDay.getTime() },
+            slotStart: { $exists: true },
+            slotEnd: { $exists: true }
+          });
+
+          const parseBillTime = (timeStr) => {
+            if (!timeStr) return null;
+            let str = timeStr.toLowerCase().trim();
+            let hours = 0, minutes = 0;
+            if (str.includes('am') || str.includes('pm')) {
+              const isPM = str.includes('pm');
+              str = str.replace(/am|pm/gi, '').trim();
+              const parts = str.split(':');
+              hours = parseInt(parts[0]);
+              minutes = parseInt(parts[1] || '0');
+              if (isPM && hours !== 12) hours += 12;
+              else if (!isPM && hours === 12) hours = 0;
+            } else {
+              const parts = str.split(':');
+              hours = parseInt(parts[0]);
+              minutes = parseInt(parts[1] || '0');
+            }
+            return hours * 60 + minutes;
+          };
+
+          const newStart = parseBillTime(slotStart);
+          const newEnd = parseBillTime(slotEnd);
+
+          if (newStart !== null && newEnd !== null) {
+            const overlap = existingAppointments.some(apt => {
+              const existStart = parseBillTime(apt.slotStart);
+              const existEnd = parseBillTime(apt.slotEnd);
+              if (existStart === null || existEnd === null) return false;
+              return newStart < existEnd && newEnd > existStart;
+            });
+
+            if (overlap) {
+              return res.status(200).json({
+                success: false,
+                message: 'This time slot overlaps with an existing appointment for this staff member',
+                statusCode: 409
+              });
+            }
+          }
+        }
       }
 
       const previousStatus = existingBill.billStatus;

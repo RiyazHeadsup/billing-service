@@ -9,6 +9,9 @@ router.post('/initiatePayment', paymentController.initiatePayment);
 // Booking payment (cart flow)
 router.post('/initiateBookingPayment', paymentController.initiateBookingPayment);
 
+// Subscription payment
+router.post('/initiateSubscriptionPayment', paymentController.initiateSubscriptionPayment);
+
 // Paytm callback
 router.post('/paymentCallback', paymentController.paymentCallback);
 

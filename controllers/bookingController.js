@@ -1,4 +1,8 @@
 const Booking = require('../models/Booking');
+const ClientSubscription = require('../models/ClientSubscription');
+const SubscriptionTransaction = require('../models/SubscriptionTransaction');
+require('../models/Staff');
+require('../models/ClientAddress');
 
 class BookingController {
   // Add to cart - creates a booking with IN_CART status
@@ -143,7 +147,11 @@ class BookingController {
       const options = {
         page: parseInt(req.body.page) || 1,
         limit: parseInt(req.body.limit) || 10,
-        sort: req.body.sort || { createdAt: -1 }
+        sort: req.body.sort || { createdAt: -1 },
+        populate: [
+          { path: 'services.staff', select: 'name phoneNumber img rating' },
+          { path: 'address', select: 'label type flat address landmark city state pincode lat lng' },
+        ],
       };
       const bookings = await Booking.paginate(req.body.search, options);
 
@@ -300,10 +308,58 @@ class BookingController {
       if (!booking) {
         return res.status(404).json({ error: 'Booking not found' });
       }
+
+      // Revert subscription usage if booking had subscription-covered services
+      let subscriptionReverted = false;
+      const services = booking.services || [];
+      console.log('Cancel booking services:', JSON.stringify(services.map(s => ({ name: s.name, coveredBySubscription: s.coveredBySubscription, subscriptionId: s.subscriptionId, freeQty: s.freeQty })), null, 2));
+      for (const svc of services) {
+        if (!svc.coveredBySubscription || !svc.subscriptionId || !svc.freeQty) {
+          console.log(`Skipping service ${svc.name}: covered=${svc.coveredBySubscription}, subId=${svc.subscriptionId}, freeQty=${svc.freeQty}`);
+          continue;
+        }
+
+        // Revert usage count
+        const revertResult = await ClientSubscription.findByIdAndUpdate(svc.subscriptionId, {
+          $inc: { totalServicesUsed: -(svc.freeQty) }
+        }, { new: true });
+        console.log(`Revert result for ${svc.subscriptionId}:`, revertResult ? `totalServicesUsed now=${revertResult.totalServicesUsed}` : 'NOT FOUND');
+
+        // Mark existing transactions as reversed
+        await SubscriptionTransaction.updateMany(
+          { bookingId: booking._id, serviceId: svc.id, status: 'completed' },
+          { status: 'reversed', remarks: `Reversed: booking cancelled — ${reason || 'no reason'}` }
+        );
+
+        // Create reversal transaction
+        const clientSub = await ClientSubscription.findById(svc.subscriptionId);
+        if (clientSub) {
+          await SubscriptionTransaction.create({
+            clientSubscriptionId: clientSub._id,
+            clientId: clientSub.clientId,
+            subscriptionId: clientSub.subscriptionId,
+            type: 'service',
+            serviceId: svc.id,
+            serviceName: svc.name,
+            bookingId: booking._id,
+            servicePrice: svc.pricing?.basePrice || 0,
+            discountApplied: -((svc.pricing?.basePrice || 0) * svc.freeQty),
+            freeQty: -(svc.freeQty),
+            unitId: booking.unitId || null,
+            status: 'reversed',
+            remarks: `Reversal: ${svc.freeQty}x ${svc.name} — booking cancelled`,
+          });
+        }
+
+        subscriptionReverted = true;
+        console.log(`Subscription ${svc.subscriptionId}: reverted ${svc.freeQty}x ${svc.name} for cancelled booking ${booking._id}`);
+      }
+
       res.json({
         statusCode: 200,
         message: 'Booking cancelled successfully',
-        data: booking
+        data: booking,
+        subscriptionReverted,
       });
     } catch (error) {
       res.status(500).json({ error: error.message });

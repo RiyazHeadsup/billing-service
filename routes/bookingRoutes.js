@@ -1,5 +1,6 @@
 const express = require('express');
 const bookingController = require('../controllers/bookingController');
+const { bookWithSubscription } = require('../controllers/subscriptionBookingController');
 
 const router = express.Router();
 
@@ -25,5 +26,8 @@ router.post('/rescheduleBooking', bookingController.rescheduleBooking);
 router.post('/completeBooking', bookingController.completeBooking);
 router.post('/acceptBooking', bookingController.acceptBooking);
 router.post('/updateServiceStatus', bookingController.updateServiceStatus);
+
+// Subscription booking (no payment)
+router.post('/bookWithSubscription', bookWithSubscription);
 
 module.exports = router;

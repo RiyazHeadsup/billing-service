@@ -160,14 +160,14 @@ const billSchema = new mongoose.Schema({
       savings: Number
     },
     discount: {
-      type: String,
+      discountType: String,
       value: Number,
       source: String,
       amount: Number
     },
     staff: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'Staff'
     },
     incentive: Number
   }],
@@ -192,14 +192,14 @@ const billSchema = new mongoose.Schema({
       savings: Number
     },
     discount: {
-      type: String,
+      discountType: String,
       value: Number,
       source: String,
       amount: Number
     },
     staff: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'Staff'
     }
   }],
   newMemberships: [{
@@ -240,7 +240,7 @@ const billSchema = new mongoose.Schema({
     },
     staff: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'Staff'
     }
   }],
   calculations: {
@@ -371,7 +371,7 @@ const billSchema = new mongoose.Schema({
   },
   billStatus: {
     type: String,
-    enum: ['COMPLETED', 'PENDING', 'CANCELLED', 'REFUNDED'],
+    enum: ['COMPLETED', 'PENDING', 'CANCELLED', 'REFUNDED', 'APPOINTMENT'],
     default: 'COMPLETED'
   },
   unitId: {

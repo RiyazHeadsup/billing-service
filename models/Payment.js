@@ -84,6 +84,20 @@ const paymentSchema = new mongoose.Schema({
   remarks: {
     type: String,
     trim: true
+  },
+  subscriptionId: {
+    type: String,
+    index: true
+  },
+  subscriptionMeta: {
+    planName: String,
+    planPrice: Number,
+    taxAmount: Number,
+    totalAmount: Number,
+    durationInDays: Number,
+    totalServicesAllowed: Number,
+    serviceUsage: mongoose.Schema.Types.Mixed,
+    complementaryUsage: mongoose.Schema.Types.Mixed
   }
 }, {
   timestamps: true,
