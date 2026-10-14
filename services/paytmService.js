@@ -2,11 +2,17 @@ const PaytmChecksum = require('paytmchecksum');
 
 class PaytmService {
   constructor() {
-    this.mid = process.env.PAYTM_MID || 'fuAjHF73812575181306';
-    this.merchantKey = process.env.PAYTM_MERCHANT_KEY || 'wm7XOLVnfAhu2b7f';
+    // Credentials come only from the environment. They used to have hard-coded
+    // fallbacks here, which put the live merchant key in git.
+    this.mid = process.env.PAYTM_MID;
+    this.merchantKey = process.env.PAYTM_MERCHANT_KEY;
     this.website = process.env.PAYTM_WEBSITE || 'DEFAULT';
     this.baseUrl = process.env.PAYTM_BASE_URL || 'https://secure.paytmpayments.com';
     this.callbackUrl = process.env.PAYTM_CALLBACK_URL || 'https://app-api.elevatelifestyle.in/secure/paymentCallback';
+
+    if (!this.mid || !this.merchantKey) {
+      console.error('❌ PAYTM_MID / PAYTM_MERCHANT_KEY not set — Paytm payments will fail');
+    }
   }
 
   async generateSignature(body) {
@@ -42,7 +48,6 @@ class PaytmService {
     console.log('--- Paytm initiateTransaction ---');
     console.log('URL:', url);
     console.log('MID:', this.mid);
-    console.log('Key (first 4 chars):', this.merchantKey?.substring(0, 4));
     console.log('Body:', JSON.stringify(body, null, 2));
     console.log('Callback URL:', this.callbackUrl);
 
