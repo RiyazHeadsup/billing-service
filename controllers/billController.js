@@ -5,6 +5,7 @@ const WalletTransaction = require('../models/WalletTransaction');
 const Inventory = require('../models/Inventory');
 const InventoryTransaction = require('../models/InventoryTransaction');
 const Service = require('../models/Service');
+const { notifyAppointment, panelUpdateEvent } = require('../services/appointmentNotifier');
 
 async function createClientMemberships(newMemberships, clientId, createdBy) {
   try {
@@ -432,6 +433,10 @@ class BillController {
       const bill = new Bill(req.body);
       await bill.save();
 
+      if (bill.billType === 'APPOINTMENT' && bill.billStatus === 'APPOINTMENT') {
+        notifyAppointment(bill.toObject(), 'booked_by_salon');
+      }
+
       if (req.body.newMemberships && req.body.newMemberships.length > 0) {
         await createClientMemberships(req.body.newMemberships, req.body.client.id, req.body.createdBy);
       }
@@ -578,6 +583,11 @@ class BillController {
       const previousStatus = existingBill.billStatus;
 
       const bill = await Bill.findByIdAndUpdate(_id, req.body, { new: true });
+
+      // Tell the customer when the salon cancels, completes or moves an appointment
+      const appointmentEvent = panelUpdateEvent(existingBill.toObject(), bill?.toObject());
+      if (appointmentEvent === 'rescheduled') await Bill.updateOne({ _id }, { $unset: { reminderSentAt: 1 } }, { timestamps: false });
+      if (appointmentEvent) notifyAppointment(bill.toObject(), appointmentEvent);
 
       // Process memberships if they're being added
       if (req.body.newMemberships && req.body.newMemberships.length > 0) {

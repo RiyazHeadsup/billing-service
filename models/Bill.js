@@ -403,6 +403,8 @@ const billSchema = new mongoose.Schema({
     trim: true
   },
   cancelledAt: Date,
+  // Set when the appointment reminder push is sent; cleared on reschedule
+  reminderSentAt: Date,
   domainId: String,
   collab: [{
     type: String,
