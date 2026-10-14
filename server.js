@@ -21,11 +21,15 @@ const paymentRoutes = require('./routes/paymentRoutes');
 const clientAddressRoutes = require('./routes/clientAddressRoutes');
 const walletOtpRoutes = require('./routes/walletOtpRoutes');
 const dayClosingRoutes = require('./routes/dayClosingRoutes');
+const { clientScope } = require('./middleware/clientScope');
 
 const app = express();
 const PORT = parseInt(process.env.PORT) || 5001;
 
 app.use(express.json());
+
+// Customer requests (x-client-id from the gateway): scope to that client
+app.use(clientScope);
 
 const database = new DatabaseConfig();
 const consulConfig = new ConsulConfig({
