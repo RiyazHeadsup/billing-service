@@ -22,6 +22,7 @@ const clientAddressRoutes = require('./routes/clientAddressRoutes');
 const walletOtpRoutes = require('./routes/walletOtpRoutes');
 const dayClosingRoutes = require('./routes/dayClosingRoutes');
 const slotRoutes = require('./routes/slotRoutes');
+const appAppointmentRoutes = require('./routes/appAppointmentRoutes');
 const { clientScope } = require('./middleware/clientScope');
 
 const app = express();
@@ -57,6 +58,7 @@ app.use('/', clientAddressRoutes);
 app.use('/', walletOtpRoutes);
 app.use('/', dayClosingRoutes);
 app.use('/', slotRoutes);
+app.use('/', appAppointmentRoutes);
 
 async function startServer() {
   try {

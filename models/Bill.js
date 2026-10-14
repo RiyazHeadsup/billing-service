@@ -384,6 +384,25 @@ const billSchema = new mongoose.Schema({
   slotEnd: {
     type: String
   },
+  // Where an appointment came from. Unset on bills made before this existed.
+  source: {
+    type: String,
+    enum: ['APP', 'PANEL', 'WALKIN', 'PHONE']
+  },
+  // How an appointment will be paid
+  paymentMode: {
+    type: String,
+    enum: ['ONLINE', 'PAY_AT_SALON']
+  },
+  cancelledBy: {
+    type: String,
+    enum: ['CLIENT', 'SALON']
+  },
+  cancelReason: {
+    type: String,
+    trim: true
+  },
+  cancelledAt: Date,
   domainId: String,
   collab: [{
     type: String,
