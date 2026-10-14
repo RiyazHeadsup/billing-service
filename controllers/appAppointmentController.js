@@ -56,7 +56,10 @@ const startInstant = (bill) => {
   return mins === null ? null : zonedMidnight(billDay(bill)) + mins * 60000;
 };
 
-const isUpcoming = (bill) => UPCOMING.includes(bill.billStatus) && bill.status !== 'cancelled';
+const isOpen = (bill) => UPCOMING.includes(bill.billStatus) && bill.status !== 'cancelled';
+// Open and not on a past day. Old panel appointments that were never
+// completed or cancelled stay "open" forever; they are past, not upcoming.
+const isUpcoming = (bill) => isOpen(bill) && billDay(bill) >= localNow().date;
 
 const withinWindow = (bill, unit, now = Date.now()) => {
   const start = startInstant(bill);
@@ -225,7 +228,7 @@ const present = async (bill, units, staffNames) => {
     billNumber: bill.billNumber,
     status: bill.billStatus === 'CANCELLED' || bill.status === 'cancelled' ? 'CANCELLED'
       : bill.billStatus === 'COMPLETED' ? 'COMPLETED'
-        : upcoming ? 'UPCOMING' : bill.billStatus,
+        : upcoming ? 'UPCOMING' : 'PAST',
     date: billDay(bill),
     slotStart: start !== null ? toHHMM(start) : bill.slotStart || null,
     slotEnd: end !== null ? toHHMM(end) : bill.slotEnd || null,
@@ -256,11 +259,18 @@ const myAppointments = async (req, res) => {
     const page = Math.max(parseInt(req.body.page, 10) || 1, 1);
     const limit = Math.min(parseInt(req.body.limit, 10) || 20, 50);
     const filter = { billType: 'APPOINTMENT', ...(await ownerFilter(cid)) };
-    if (req.body.status === 'upcoming') Object.assign(filter, { billStatus: { $in: UPCOMING }, status: { $ne: 'cancelled' } });
-    if (req.body.status === 'past') filter.$and = [{ $or: [{ billStatus: { $nin: UPCOMING } }, { status: 'cancelled' }] }];
+    const todayStart = zonedMidnight(localNow().date);
+    if (req.body.status === 'upcoming') {
+      Object.assign(filter, { billStatus: { $in: UPCOMING }, status: { $ne: 'cancelled' }, date: { $gte: todayStart } });
+    }
+    if (req.body.status === 'past') {
+      filter.$and = [{ $or: [{ billStatus: { $nin: UPCOMING } }, { status: 'cancelled' }, { date: { $lt: todayStart } }] }];
+    }
+    // Upcoming: soonest first. Past/all: latest first.
+    const order = req.body.status === 'upcoming' ? 1 : -1;
 
     const [bills, total] = await Promise.all([
-      Bill.find(filter).sort({ date: -1, slotStart: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Bill.find(filter).sort({ date: order, slotStart: order }).skip((page - 1) * limit).limit(limit).lean(),
       Bill.countDocuments(filter)
     ]);
 
