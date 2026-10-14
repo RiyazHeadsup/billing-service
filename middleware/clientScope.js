@@ -5,6 +5,7 @@ const Client = require('../models/Client');
 const ClientAddress = require('../models/ClientAddress');
 const Wallet = require('../models/Wallet');
 const Payment = require('../models/Payment');
+const Subscription = require('../models/Subscription');
 
 // The gateway sets `x-client-id` only for customer (OTP-login) tokens, after
 // stripping any value the caller sent. Requests without it are staff/admin and
@@ -78,15 +79,66 @@ const rules = {
     if (!ok) return notFound(res);
   },
 
-  // ── payments ── (amounts are still taken from the body; see Phase 1.1 step 3)
+  // ── payments ──
+  // Amounts come from our own records, never the request.
+  // TODO: initiateBookingPayment still trusts `amount` — cart prices are set by
+  // the caller at addToCart. Server-side pricing lands with Phase 1.2.
   '/initiatePayment': async (req, res, cid) => {
     req.body.clientId = cid;
-    const { billId, bookingId } = req.body;
-    if (billId && !(mongoose.isValidObjectId(billId) && await Bill.exists({ _id: billId, ...(await billOwner(cid)) }))) return notFound(res);
-    if (bookingId && !(mongoose.isValidObjectId(bookingId) && await Booking.exists({ _id: bookingId, ...bookingOwner(cid) }))) return notFound(res);
+    const { billId } = req.body;
+    if (!mongoose.isValidObjectId(billId)) {
+      return res.status(400).json({ success: false, statusCode: 400, message: 'billId is required' });
+    }
+    const bill = await Bill.findOne({ _id: billId, ...(await billOwner(cid)) })
+      .select('calculations.totals.grandTotal payment.totalPaid appPaymentCompleted').lean();
+    if (!bill) return notFound(res);
+    if (bill.appPaymentCompleted) {
+      return res.status(409).json({ success: false, statusCode: 409, message: 'Bill already paid' });
+    }
+    // Same figure the app shows on the Pay button
+    req.body.amount = Math.round(bill.calculations?.totals?.grandTotal || bill.payment?.totalPaid || 0);
+    if (!(req.body.amount > 0)) {
+      return res.status(400).json({ success: false, statusCode: 400, message: 'Nothing to pay on this bill' });
+    }
+    delete req.body.bookingId;
   },
   '/initiateBookingPayment': (req, res, cid) => { req.body.clientId = cid; },
-  '/initiateSubscriptionPayment': (req, res, cid) => { req.body.clientId = cid; },
+  '/initiateSubscriptionPayment': async (req, res, cid) => {
+    const { subscriptionId, unitId } = req.body;
+    const plan = mongoose.isValidObjectId(subscriptionId) &&
+      await Subscription.findOne({ _id: subscriptionId, isActive: { $ne: false } }).lean();
+    if (!plan) return notFound(res);
+
+    // Same maths as the app's SubscriptionDetailScreen
+    const taxAmount = plan.taxInclusive
+      ? Math.round((plan.price * plan.taxPercentage) / (100 + plan.taxPercentage))
+      : Math.round((plan.price * plan.taxPercentage) / 100);
+    const totalAmount = Math.round(plan.taxInclusive ? plan.price : plan.price + taxAmount);
+
+    req.body = {
+      clientId: cid,
+      subscriptionId: plan._id,
+      unitId,
+      planName: plan.name,
+      planPrice: plan.price,
+      taxAmount,
+      totalAmount,
+      durationInDays: plan.durationInDays,
+      totalServicesAllowed: plan.totalServicesAllowed,
+      serviceUsage: (plan.serviceRules || []).map(r => ({
+        serviceId: r.serviceId,
+        categoryId: r.categoryId,
+        subCategoryId: r.subCategoryId,
+        maxAllowed: r.maxAllowed ?? -1,
+        used: 0
+      })),
+      complementaryUsage: (plan.complementaryServices || []).map(c => ({
+        serviceId: c.serviceId,
+        maxUsage: c.maxUsage ?? -1,
+        used: 0
+      }))
+    };
+  },
   '/getPaymentStatus': async (req, res, cid) => {
     const { orderId } = req.body;
     if (!orderId || !(await Payment.exists({ orderId: String(orderId), clientId: cid }))) return notFound(res);

@@ -83,6 +83,77 @@ async function deductSubscriptionUsage(booking) {
   }
 }
 
+// Run once, when a payment first turns TXN_SUCCESS: confirm every booking it
+// paid for, settle the bill, activate the subscription.
+async function applySuccess(payment, paymentMode) {
+  const bookingIds = payment.bookingIds?.length ? payment.bookingIds : [payment.bookingId].filter(Boolean);
+  for (const bookingId of bookingIds) {
+    const booking = await Booking.findByIdAndUpdate(bookingId, {
+      bookingStatus: 'CONFIRMED',
+      status: 'confirmed',
+      paymentDone: true,
+      'payment.paymentStatus': 'Paid',
+      'payment.totalPaid': payment.amount,
+      'payment.activePaymentMethods': [{ method: paymentMode || 'ONLINE', amount: payment.amount }]
+    }, { new: true });
+    if (booking) await deductSubscriptionUsage(booking);
+    console.log(`Booking ${bookingId} confirmed for order: ${payment.orderId}`);
+  }
+
+  if (payment.billId) {
+    await Bill.findByIdAndUpdate(payment.billId, {
+      appPaymentCompleted: true,
+      'payment.paymentStatus': 'Paid',
+    });
+    console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${payment.orderId}`);
+  }
+
+  if (payment.subscriptionId) {
+    await activateSubscription(payment, paymentMode);
+  }
+}
+
+const GATEWAY_STATUSES = ['TXN_SUCCESS', 'TXN_FAILURE', 'PENDING'];
+
+// The only place a payment's status is decided. Asks Paytm for the order's
+// status server-side; whatever a browser, app or callback body claims is never
+// used. A success whose amount doesn't match what we initiated is held as
+// PENDING for a person to look at.
+async function syncWithGateway(orderId) {
+  const payment = await Payment.findOne({ orderId: String(orderId) });
+  if (!payment) return { payment: null, gateway: null };
+
+  const gateway = (await paytmService.getTransactionStatus(payment.orderId)).body || {};
+  let status = gateway.resultInfo?.resultStatus;
+  if (!GATEWAY_STATUSES.includes(status)) return { payment, gateway };
+
+  if (status === 'TXN_SUCCESS' && Math.abs(Number(gateway.txnAmount) - Number(payment.amount)) > 0.01) {
+    console.error(`[PAYMENT] Amount mismatch for ${payment.orderId}: paid ${gateway.txnAmount}, expected ${payment.amount}`);
+    status = 'PENDING';
+  }
+
+  const wasSuccess = payment.paymentStatus === 'TXN_SUCCESS';
+  if (wasSuccess) return { payment, gateway };
+
+  payment.paymentStatus = status;
+  payment.transactionId = gateway.txnId || payment.transactionId;
+  payment.paymentMode = gateway.paymentMode || payment.paymentMode;
+  payment.gatewayResponse = {
+    ...payment.gatewayResponse,
+    txnId: gateway.txnId,
+    bankTxnId: gateway.bankTxnId,
+    bankName: gateway.bankName,
+    gatewayName: gateway.gatewayName,
+    respCode: gateway.resultInfo?.resultCode,
+    respMsg: gateway.resultInfo?.resultMsg,
+    txnDate: gateway.txnDate,
+  };
+  await payment.save();
+
+  if (status === 'TXN_SUCCESS') await applySuccess(payment, gateway.paymentMode);
+  return { payment, gateway };
+}
+
 class PaymentController {
   // Initiate payment for any purpose (standalone)
   async initiatePayment(req, res) {
@@ -310,96 +381,40 @@ class PaymentController {
     }
   }
 
-  // Paytm callback handler
+  // Paytm server-to-server callback. The body is only used to find the order;
+  // the status comes from Paytm via syncWithGateway.
   async paymentCallback(req, res) {
     try {
       const callbackData = req.body;
       const orderId = callbackData.ORDERID;
-      const txnStatus = callbackData.STATUS;
+      if (!orderId) return res.status(400).json({ error: 'ORDERID is required' });
 
-      console.log(`Payment callback received for order: ${orderId}, status: ${txnStatus}`);
-
-      // Verify Paytm checksum signature to prevent forged callbacks
-      const checksumHash = callbackData.CHECKSUMHASH;
-      if (checksumHash) {
+      if (callbackData.CHECKSUMHASH) {
         // PaytmChecksum.verifySignature removes CHECKSUMHASH internally before verifying
-        const isValid = await paytmService.verifySignature(callbackData, checksumHash);
+        const isValid = await paytmService.verifySignature(callbackData, callbackData.CHECKSUMHASH);
         if (!isValid) {
           console.error(`Invalid checksum for order: ${orderId}`);
           return res.status(403).json({ error: 'Invalid checksum. Callback rejected.' });
         }
-      } else {
-        // No checksum provided — verify with Paytm gateway directly
-        const gatewayCheck = await paytmService.getTransactionStatus(orderId);
-        const gatewayStatus = gatewayCheck.body?.resultInfo?.resultStatus;
-        if (gatewayStatus !== txnStatus) {
-          console.error(`Status mismatch for order ${orderId}: callback=${txnStatus}, gateway=${gatewayStatus}`);
-          return res.status(403).json({ error: 'Payment status verification failed.' });
-        }
       }
 
-      const payment = await Payment.findOne({ orderId });
+      const { payment } = await syncWithGateway(orderId);
       if (!payment) {
         console.error(`Payment not found for order: ${orderId}`);
         return res.status(404).json({ error: 'Payment not found' });
       }
 
-      // Update payment with gateway response
-      payment.paymentStatus = txnStatus;
-      payment.transactionId = callbackData.TXNID;
-      payment.paymentMode = callbackData.PAYMENTMODE;
-      payment.gatewayResponse = {
-        txnId: callbackData.TXNID,
-        bankTxnId: callbackData.BANKTXNID,
-        bankName: callbackData.BANKNAME,
-        gatewayName: callbackData.GATEWAYNAME,
-        respCode: callbackData.RESPCODE,
-        respMsg: callbackData.RESPMSG,
-        txnDate: callbackData.TXNDATE
-      };
-      await payment.save();
-
-      // If payment succeeded, confirm only the single booking linked to this payment
-      if (txnStatus === 'TXN_SUCCESS' && payment.bookingId) {
-        await Booking.findByIdAndUpdate(payment.bookingId, {
-          bookingStatus: 'CONFIRMED',
-          status: 'confirmed',
-          paymentDone: true,
-          'payment.paymentStatus': 'Paid',
-          'payment.totalPaid': payment.amount,
-          'payment.activePaymentMethods': [{ method: payment.paymentMode || 'UPI', amount: payment.amount }]
-        });
-        console.log(`Booking ${payment.bookingId} confirmed for order: ${orderId}`);
-
-        // Deduct subscription usage and create transactions
-        const confirmedBooking = await Booking.findById(payment.bookingId);
-        if (confirmedBooking) await deductSubscriptionUsage(confirmedBooking);
-      }
-
-      // If payment succeeded and linked to a bill, mark app payment as completed
-      if (txnStatus === 'TXN_SUCCESS' && payment.billId) {
-        await Bill.findByIdAndUpdate(payment.billId, {
-          appPaymentCompleted: true,
-          'payment.paymentStatus': 'Paid',
-        });
-        console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
-      }
-
-      // If subscription payment succeeded, auto-activate subscription
-      if (txnStatus === 'TXN_SUCCESS' && payment.subscriptionId) {
-        await activateSubscription(payment, callbackData.PAYMENTMODE);
-      }
-
+      const status = payment.paymentStatus;
       res.status(200).json({
-        success: txnStatus === 'TXN_SUCCESS',
+        success: status === 'TXN_SUCCESS',
         statusCode: 200,
-        message: txnStatus === 'TXN_SUCCESS' ? 'Payment successful' : 'Payment failed',
+        message: status === 'TXN_SUCCESS' ? 'Payment successful' : 'Payment failed',
         data: {
-          orderId: orderId,
-          transactionId: callbackData.TXNID,
-          status: txnStatus,
-          amount: callbackData.TXNAMOUNT,
-          paymentMode: callbackData.PAYMENTMODE
+          orderId,
+          transactionId: payment.transactionId,
+          status,
+          amount: payment.amount,
+          paymentMode: payment.paymentMode
         }
       });
     } catch (error) {
@@ -408,7 +423,8 @@ class PaymentController {
     }
   }
 
-  // Check payment status and update bookings accordingly
+  // Check payment status with Paytm and apply it. Also used by the gateway's
+  // /secure/* handlers.
   async getPaymentStatus(req, res) {
     try {
       const { orderId } = req.body;
@@ -416,59 +432,13 @@ class PaymentController {
         return res.status(400).json({ error: 'orderId is required' });
       }
 
-      // Check with Paytm
-      const paytmResponse = await paytmService.getTransactionStatus(orderId);
-
-      // Update local payment record
-      const payment = await Payment.findOne({ orderId });
-      if (payment && paytmResponse.body) {
-        const txnStatus = paytmResponse.body.resultInfo?.resultStatus;
-        payment.paymentStatus = txnStatus || payment.paymentStatus;
-        payment.transactionId = paytmResponse.body.txnId || payment.transactionId;
-        payment.paymentMode = paytmResponse.body.paymentMode || payment.paymentMode;
-        payment.gatewayResponse = {
-          ...payment.gatewayResponse,
-          txnId: paytmResponse.body.txnId,
-          bankTxnId: paytmResponse.body.bankTxnId,
-          bankName: paytmResponse.body.bankName,
-          gatewayName: paytmResponse.body.gatewayName,
-          txnDate: paytmResponse.body.txnDate,
-        };
-        await payment.save();
-
-        // On success, confirm only the single booking linked to this payment
-        if (txnStatus === 'TXN_SUCCESS' && payment.bookingId) {
-          await Booking.findByIdAndUpdate(payment.bookingId, {
-            bookingStatus: 'CONFIRMED',
-            status: 'confirmed',
-            paymentDone: true,
-            'payment.paymentStatus': 'Paid',
-            'payment.totalPaid': payment.amount,
-            'payment.activePaymentMethods': [{ method: paytmResponse.body.paymentMode || 'ONLINE', amount: payment.amount }]
-          });
-          console.log(`Booking ${payment.bookingId} confirmed for order: ${orderId}`);
-        }
-
-        // On success, mark bill app payment as completed
-        if (txnStatus === 'TXN_SUCCESS' && payment.billId) {
-          await Bill.findByIdAndUpdate(payment.billId, {
-            appPaymentCompleted: true,
-            'payment.paymentStatus': 'Paid',
-          });
-          console.log(`Bill ${payment.billId} appPaymentCompleted set to true for order: ${orderId}`);
-        }
-
-        // On success, auto-activate subscription
-        if (txnStatus === 'TXN_SUCCESS' && payment.subscriptionId) {
-          await activateSubscription(payment, paytmResponse.body.paymentMode);
-        }
-      }
+      const { payment, gateway } = await syncWithGateway(orderId);
 
       res.json({
         statusCode: 200,
         data: {
           localStatus: payment,
-          gatewayStatus: paytmResponse.body
+          gatewayStatus: gateway
         }
       });
     } catch (error) {
