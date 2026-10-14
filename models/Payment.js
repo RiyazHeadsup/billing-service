@@ -42,8 +42,12 @@ const paymentSchema = new mongoose.Schema({
   },
   paymentGateway: {
     type: String,
-    enum: ['paytm', 'razorpay', 'other'],
+    enum: ['paytm', 'cashfree', 'razorpay', 'other'],
     default: 'paytm'
+  },
+  // Cashfree checkout session (the app's SDK opens the payment with it)
+  paymentSessionId: {
+    type: String
   },
   paymentStatus: {
     type: String,

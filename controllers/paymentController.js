@@ -4,6 +4,7 @@ const Bill = require('../models/Bill');
 const ClientSubscription = require('../models/ClientSubscription');
 const SubscriptionTransaction = require('../models/SubscriptionTransaction');
 const paytmService = require('../services/paytmService');
+const cashfreeService = require('../services/cashfreeService');
 
 // Auto-activate subscription after successful payment
 async function activateSubscription(payment, paymentMode) {
@@ -115,43 +116,79 @@ async function applySuccess(payment, paymentMode) {
 
 const GATEWAY_STATUSES = ['TXN_SUCCESS', 'TXN_FAILURE', 'PENDING'];
 
-// The only place a payment's status is decided. Asks Paytm for the order's
-// status server-side; whatever a browser, app or callback body claims is never
-// used. A success whose amount doesn't match what we initiated is held as
-// PENDING for a person to look at.
+// Gateway answers, normalised: { status, amount, txnId, paymentMode, response, raw }.
+// status is TXN_SUCCESS | TXN_FAILURE | PENDING, or null when the gateway has
+// nothing usable (leave the payment as it is).
+const paytmStatus = async (payment) => {
+  const g = (await paytmService.getTransactionStatus(payment.orderId)).body || {};
+  const status = g.resultInfo?.resultStatus;
+  return {
+    status: GATEWAY_STATUSES.includes(status) ? status : null,
+    amount: g.txnAmount,
+    txnId: g.txnId,
+    paymentMode: g.paymentMode,
+    response: {
+      txnId: g.txnId, bankTxnId: g.bankTxnId, bankName: g.bankName, gatewayName: g.gatewayName,
+      respCode: g.resultInfo?.resultCode, respMsg: g.resultInfo?.resultMsg, txnDate: g.txnDate
+    },
+    raw: g
+  };
+};
+
+const CASHFREE_STATUS = { PAID: 'TXN_SUCCESS', ACTIVE: 'PENDING', EXPIRED: 'TXN_FAILURE', TERMINATED: 'TXN_FAILURE', TERMINATION_REQUESTED: 'TXN_FAILURE' };
+
+const cashfreeStatus = async (payment) => {
+  const order = await cashfreeService.fetchOrder(payment.orderId);
+  const status = CASHFREE_STATUS[order?.order_status] || null;
+  let paid = null;
+  if (status === 'TXN_SUCCESS') {
+    const payments = await cashfreeService.fetchPayments(payment.orderId);
+    paid = (Array.isArray(payments) ? payments : []).find(p => p.payment_status === 'SUCCESS') || null;
+  }
+  return {
+    status,
+    amount: order?.order_amount,
+    txnId: paid?.cf_payment_id ? String(paid.cf_payment_id) : undefined,
+    paymentMode: paid?.payment_group,
+    response: {
+      txnId: paid?.cf_payment_id ? String(paid.cf_payment_id) : undefined,
+      bankTxnId: paid?.bank_reference,
+      gatewayName: 'cashfree',
+      respCode: order?.order_status,
+      respMsg: paid?.payment_message || order?.order_status,
+      txnDate: paid?.payment_time
+    },
+    raw: { order_id: order?.order_id, order_status: order?.order_status, order_amount: order?.order_amount, gateway: 'cashfree' }
+  };
+};
+
+// The only place a payment's status is decided. Asks the payment's gateway
+// (Paytm or Cashfree) for the order's status server-side; whatever a browser,
+// app or callback body claims is never used. A success whose amount doesn't
+// match what we initiated is held as PENDING for a person to look at.
 async function syncWithGateway(orderId) {
   const payment = await Payment.findOne({ orderId: String(orderId) });
   if (!payment) return { payment: null, gateway: null };
 
-  const gateway = (await paytmService.getTransactionStatus(payment.orderId)).body || {};
-  let status = gateway.resultInfo?.resultStatus;
-  if (!GATEWAY_STATUSES.includes(status)) return { payment, gateway };
+  const result = payment.paymentGateway === 'cashfree' ? await cashfreeStatus(payment) : await paytmStatus(payment);
+  let { status } = result;
+  if (!status) return { payment, gateway: result.raw };
 
-  if (status === 'TXN_SUCCESS' && Math.abs(Number(gateway.txnAmount) - Number(payment.amount)) > 0.01) {
-    console.error(`[PAYMENT] Amount mismatch for ${payment.orderId}: paid ${gateway.txnAmount}, expected ${payment.amount}`);
+  if (status === 'TXN_SUCCESS' && Math.abs(Number(result.amount) - Number(payment.amount)) > 0.01) {
+    console.error(`[PAYMENT] Amount mismatch for ${payment.orderId}: paid ${result.amount}, expected ${payment.amount}`);
     status = 'PENDING';
   }
 
-  const wasSuccess = payment.paymentStatus === 'TXN_SUCCESS';
-  if (wasSuccess) return { payment, gateway };
+  if (payment.paymentStatus === 'TXN_SUCCESS') return { payment, gateway: result.raw };
 
   payment.paymentStatus = status;
-  payment.transactionId = gateway.txnId || payment.transactionId;
-  payment.paymentMode = gateway.paymentMode || payment.paymentMode;
-  payment.gatewayResponse = {
-    ...payment.gatewayResponse,
-    txnId: gateway.txnId,
-    bankTxnId: gateway.bankTxnId,
-    bankName: gateway.bankName,
-    gatewayName: gateway.gatewayName,
-    respCode: gateway.resultInfo?.resultCode,
-    respMsg: gateway.resultInfo?.resultMsg,
-    txnDate: gateway.txnDate,
-  };
+  payment.transactionId = result.txnId || payment.transactionId;
+  payment.paymentMode = result.paymentMode || payment.paymentMode;
+  payment.gatewayResponse = { ...payment.gatewayResponse, ...result.response };
   await payment.save();
 
-  if (status === 'TXN_SUCCESS') await applySuccess(payment, gateway.paymentMode);
-  return { payment, gateway };
+  if (status === 'TXN_SUCCESS') await applySuccess(payment, result.paymentMode);
+  return { payment, gateway: result.raw };
 }
 
 class PaymentController {
@@ -442,6 +479,84 @@ class PaymentController {
         }
       });
     } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // ── Cashfree ──
+  // Pay a bill (Scan & Pay) through Cashfree. The app opens the checkout with
+  // the returned paymentSessionId using Cashfree's SDK.
+  // For customers, clientScope has already set clientId and the bill's amount.
+  async initiateCashfreePayment(req, res) {
+    try {
+      const { amount, clientId, bookingId, billId, unitId, createdBy, remarks, customerPhone, customerEmail, customerName } = req.body;
+      if (!amount || !clientId) {
+        return res.status(400).json({ error: 'amount and clientId are required' });
+      }
+      if (!cashfreeService.isConfigured()) {
+        return res.status(503).json({ error: 'Cashfree not configured on server' });
+      }
+
+      const orderId = cashfreeService.generateOrderId('ORD');
+      const payment = new Payment({
+        orderId,
+        clientId,
+        amount,
+        bookingId: bookingId || null,
+        billId: billId || null,
+        unitId: unitId || null,
+        createdBy: createdBy || null,
+        remarks: remarks || null,
+        paymentStatus: 'INITIATED',
+        paymentGateway: 'cashfree'
+      });
+      await payment.save();
+
+      let order;
+      try {
+        order = await cashfreeService.createOrder({ orderId, amount, customerId: clientId, customerPhone, customerEmail, customerName, orderNote: remarks });
+      } catch (error) {
+        payment.paymentStatus = 'TXN_FAILURE';
+        payment.gatewayResponse = { gatewayName: 'cashfree', respMsg: error.message };
+        await payment.save();
+        console.error('[Cashfree] createOrder failed:', error.data || error.message);
+        return res.status(400).json({ success: false, message: 'Payment initiation failed', error: error.message });
+      }
+
+      payment.paymentSessionId = order.payment_session_id;
+      await payment.save();
+      res.status(200).json({
+        success: true,
+        statusCode: 200,
+        message: 'Payment initiated successfully',
+        data: {
+          orderId,
+          paymentSessionId: order.payment_session_id,
+          amount,
+          environment: cashfreeService.environment,
+          gateway: 'cashfree',
+          paymentId: payment._id
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // Cashfree's server-to-server notification. The body is only used to find
+  // the order; the status comes from Cashfree via syncWithGateway.
+  async cashfreeWebhook(req, res) {
+    try {
+      const orderId = req.body?.data?.order?.order_id;
+      if (!orderId) return res.status(400).json({ error: 'order_id missing' });
+
+      const { payment } = await syncWithGateway(orderId);
+      if (!payment) return res.status(404).json({ error: 'Payment not found' });
+
+      console.log(`[Cashfree webhook] ${req.body?.type} ${orderId} → ${payment.paymentStatus}`);
+      res.status(200).json({ success: true, received: true });
+    } catch (error) {
+      console.error('[Cashfree webhook]', error.message);
       res.status(500).json({ error: error.message });
     }
   }

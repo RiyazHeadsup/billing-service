@@ -23,4 +23,9 @@ router.post('/getPaymentsByClient', paymentController.getPaymentsByClient);
 // Refund
 router.post('/initiateRefund', paymentController.initiateRefund);
 
+// Cashfree (status is decided by getPaymentStatus/syncWithGateway for both gateways)
+router.post('/initiateCashfreePayment', paymentController.initiateCashfreePayment);
+router.post('/getCashfreeOrderStatus', paymentController.getPaymentStatus);
+router.post('/cashfreeWebhook', paymentController.cashfreeWebhook);
+
 module.exports = router;

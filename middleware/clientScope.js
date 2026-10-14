@@ -167,14 +167,16 @@ const rules = {
   '/searchBill': async (req, res, cid) => {
     req.body.search = within(req.body.search, await billOwner(cid));
   },
-  // The app only marks its own bill paid after paying. Anything else on the
-  // body (amounts, memberships, wallet methods) would run staff-only side
-  // effects, so the update is reduced to the completion flags.
-  // TODO: require a successful Payment for this bill once app payments run on
-  // this backend (today they go through the old backend's Cashfree).
+  // The app marks its own bill paid after paying. It must have a successful
+  // payment for this bill (Paytm or Cashfree, verified with the gateway).
+  // Anything else on the body (amounts, memberships, wallet methods) would run
+  // staff-only side effects, so the update is reduced to the completion flags.
   '/updateBill': async (req, res, cid) => {
     const { _id } = req.body;
     if (!(mongoose.isValidObjectId(_id) && await Bill.exists({ _id, ...(await billOwner(cid)) }))) return notFound(res);
+    if (!(await Payment.exists({ billId: _id, clientId: cid, paymentStatus: 'TXN_SUCCESS' }))) {
+      return res.status(402).json({ success: false, statusCode: 402, message: 'No successful payment for this bill' });
+    }
     req.body = { _id, status: 'completed', billStatus: 'COMPLETED', appPaymentCompleted: true };
   },
 
@@ -191,6 +193,10 @@ const rules = {
     if (!(mongoose.isValidObjectId(walletId) && await Wallet.exists({ _id: walletId, clientId: cid }))) return notFound(res);
   }
 };
+
+// Cashfree uses the same checks as Paytm
+rules['/initiateCashfreePayment'] = rules['/initiatePayment'];
+rules['/getCashfreeOrderStatus'] = rules['/getPaymentStatus'];
 
 const clientScope = async (req, res, next) => {
   const cid = req.headers['x-client-id'];
