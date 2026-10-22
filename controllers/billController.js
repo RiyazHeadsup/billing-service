@@ -6,6 +6,7 @@ const Inventory = require('../models/Inventory');
 const InventoryTransaction = require('../models/InventoryTransaction');
 const Service = require('../models/Service');
 const { notifyAppointment, panelUpdateEvent } = require('../services/appointmentNotifier');
+const { publishAppBooking } = require('../services/appBookingEvents');
 
 async function createClientMemberships(newMemberships, clientId, createdBy) {
   try {
@@ -588,6 +589,7 @@ class BillController {
       const appointmentEvent = panelUpdateEvent(existingBill.toObject(), bill?.toObject());
       if (appointmentEvent === 'rescheduled') await Bill.updateOne({ _id }, { $unset: { reminderSentAt: 1 } }, { timestamps: false });
       if (appointmentEvent) notifyAppointment(bill.toObject(), appointmentEvent);
+      publishAppBooking(bill?.toObject());
 
       // Process memberships if they're being added
       if (req.body.newMemberships && req.body.newMemberships.length > 0) {

@@ -23,6 +23,7 @@ const walletOtpRoutes = require('./routes/walletOtpRoutes');
 const dayClosingRoutes = require('./routes/dayClosingRoutes');
 const slotRoutes = require('./routes/slotRoutes');
 const appAppointmentRoutes = require('./routes/appAppointmentRoutes');
+const appBookingRoutes = require('./routes/appBookingRoutes');
 const { startReminderLoop } = require('./services/appointmentNotifier');
 const { clientScope } = require('./middleware/clientScope');
 
@@ -60,6 +61,7 @@ app.use('/', walletOtpRoutes);
 app.use('/', dayClosingRoutes);
 app.use('/', slotRoutes);
 app.use('/', appAppointmentRoutes);
+app.use('/', appBookingRoutes);
 
 async function startServer() {
   try {

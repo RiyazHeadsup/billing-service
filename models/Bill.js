@@ -394,6 +394,11 @@ const billSchema = new mongoose.Schema({
     type: String,
     enum: ['ONLINE', 'PAY_AT_SALON']
   },
+  // App bookings: did the customer pick the stylist, or was the first free one used?
+  staffChoice: {
+    type: String,
+    enum: ['CLIENT', 'AUTO']
+  },
   cancelledBy: {
     type: String,
     enum: ['CLIENT', 'SALON']
@@ -403,6 +408,15 @@ const billSchema = new mongoose.Schema({
     trim: true
   },
   cancelledAt: Date,
+  // Salon has seen an app booking (panel App Bookings "Accept"). App bookings
+  // are auto-confirmed for the customer; this only stops the panel alert.
+  acceptance: {
+    at: Date,
+    by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }
+  },
   // Set when the appointment reminder push is sent; cleared on reschedule
   reminderSentAt: Date,
   domainId: String,

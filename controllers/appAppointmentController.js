@@ -7,6 +7,7 @@ const Unit = require('../models/Unit');
 const { getAvailability, SlotError, parseBillTime, zonedMidnight } = require('../services/slotService');
 const { localNow } = require('../utils/salonTimings');
 const { notifyAppointment } = require('../services/appointmentNotifier');
+const { publishAppBooking } = require('../services/appBookingEvents');
 
 // Customer appointments from the app (Phase 1.2, Option A).
 //
@@ -196,6 +197,7 @@ const createAppointment = async (req, res) => {
       billType: 'APPOINTMENT',
       billStatus: 'APPOINTMENT',
       source: 'APP',
+      staffChoice: staffId ? 'CLIENT' : 'AUTO',
       paymentMode,
       unitId: unit._id
     });
@@ -207,6 +209,7 @@ const createAppointment = async (req, res) => {
     }
 
     notifyAppointment(bill.toObject(), 'booked');
+    publishAppBooking(bill.toObject(), 'created');
     res.status(201).json({ success: true, statusCode: 201, message: 'Appointment booked', data: await present(bill.toObject()) });
   } catch (error) {
     sendSlotError(res, error, 'createAppointment');
@@ -323,6 +326,7 @@ const cancelAppointment = async (req, res) => {
     if (!updated) return fail(res, 409, 'This appointment can no longer be changed', 'NOT_UPCOMING');
 
     notifyAppointment(updated, 'cancelled_by_client');
+    publishAppBooking(updated);
     res.json({ success: true, statusCode: 200, message: 'Appointment cancelled', data: await present(updated) });
   } catch (error) {
     sendSlotError(res, error, 'cancelAppointment');
@@ -378,6 +382,7 @@ const rescheduleAppointment = async (req, res) => {
     }
 
     notifyAppointment(updated, 'rescheduled');
+    publishAppBooking(updated);
     res.json({ success: true, statusCode: 200, message: 'Appointment rescheduled', data: await present(updated) });
   } catch (error) {
     sendSlotError(res, error, 'rescheduleAppointment');
