@@ -24,6 +24,7 @@ const dayClosingRoutes = require('./routes/dayClosingRoutes');
 const slotRoutes = require('./routes/slotRoutes');
 const appAppointmentRoutes = require('./routes/appAppointmentRoutes');
 const appBookingRoutes = require('./routes/appBookingRoutes');
+const cartOfferRoutes = require('./routes/cartOfferRoutes');
 const { startReminderLoop } = require('./services/appointmentNotifier');
 const { clientScope } = require('./middleware/clientScope');
 
@@ -62,6 +63,7 @@ app.use('/', dayClosingRoutes);
 app.use('/', slotRoutes);
 app.use('/', appAppointmentRoutes);
 app.use('/', appBookingRoutes);
+app.use('/', cartOfferRoutes);
 
 async function startServer() {
   try {

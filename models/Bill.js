@@ -394,6 +394,14 @@ const billSchema = new mongoose.Schema({
     type: String,
     enum: ['ONLINE', 'PAY_AT_SALON']
   },
+  // Cart offer applied when the app booking was made (models/CartOffer.js).
+  // The saving itself sits on the service lines as discount source 'offer'.
+  appliedOffer: {
+    offerId: { type: mongoose.Schema.Types.ObjectId, ref: 'CartOffer' },
+    title: String,
+    rewardType: String,
+    saving: Number
+  },
   // App bookings: did the customer pick the stylist, or was the first free one used?
   staffChoice: {
     type: String,
@@ -501,6 +509,9 @@ billSchema.pre('save', async function (next) {
     next();
   }
 });
+
+// Offer stats (App Control → Cart Offers); sparse: only app bookings with an offer
+billSchema.index({ 'appliedOffer.offerId': 1 }, { sparse: true });
 
 billSchema.plugin(mongoosePaginate);
 

@@ -8,6 +8,7 @@ const { getAvailability, SlotError, parseBillTime, zonedMidnight } = require('..
 const { localNow } = require('../utils/salonTimings');
 const { notifyAppointment } = require('../services/appointmentNotifier');
 const { publishAppBooking } = require('../services/appBookingEvents');
+const { evaluateCart } = require('../services/cartOffers');
 
 // Customer appointments from the app (Phase 1.2, Option A).
 //
@@ -19,6 +20,8 @@ const { publishAppBooking } = require('../services/appBookingEvents');
 // - Pay at salon only for now; online payment comes with the Cashfree port.
 // - Staff is optional; without one the first free staff for the slot is used.
 // - Prices come from the Service records, never the request.
+// - The best cart offer (services/cartOffers.js) is applied here, server-side,
+//   as per-service discounts with source 'offer'.
 //
 // The client is the gateway's x-client-id; these routes refuse requests
 // without it.
@@ -144,20 +147,33 @@ const createAppointment = async (req, res) => {
     const ids = [...new Set(serviceIds.map(String))];
     const services = await Service.find({ _id: { $in: ids } }).select('name price incentive').lean();
     const byId = new Map(services.map(s => [String(s._id), s]));
+    // Best cart offer for this customer; a failure here never blocks the booking
+    const offers = await evaluateCart({ unitId: unit._id, serviceIds: ids, clientId: cid }).catch(error => {
+      console.error('[createAppointment] cart offers:', error.message);
+      return null;
+    });
+    const offerOff = new Map((offers?.applied?.lines || []).map(l => [l.serviceId, l.amount]));
+
     const billServices = ids.map(id => {
       const s = byId.get(id);
       const price = Number(s.price) || 0;
+      const off = Math.min(offerOff.get(id) || 0, price);
+      const final = Math.round((price - off) * 100) / 100;
       return {
         id: s._id,
         name: s.name,
         quantity: 1,
-        pricing: { basePrice: price, finalPrice: price, totalPrice: price, totalBasePrice: price, savings: 0 },
-        discount: { discountType: 'fixed', value: 0, source: 'manual', amount: 0 },
+        pricing: { basePrice: price, finalPrice: final, totalPrice: final, totalBasePrice: price, savings: off },
+        discount: off > 0
+          ? { discountType: 'fixed', value: off, source: 'offer', amount: off }
+          : { discountType: 'fixed', value: 0, source: 'manual', amount: 0 },
         staff: chosenStaff,
         incentive: Number(s.incentive) || 0
       };
     });
-    const total = billServices.reduce((sum, s) => sum + s.pricing.totalPrice, 0);
+    const baseTotal = billServices.reduce((sum, s) => sum + s.pricing.totalBasePrice, 0);
+    const offerSaving = Math.round(billServices.reduce((sum, s) => sum + s.discount.amount, 0) * 100) / 100;
+    const total = Math.round((baseTotal - offerSaving) * 100) / 100;
     const day = new Date(`${date}T00:00:00Z`);
 
     const bill = new Bill({
@@ -176,13 +192,13 @@ const createAppointment = async (req, res) => {
       products: [],
       calculations: {
         items: {
-          services: { count: billServices.length, baseTotal: total, finalTotal: total, totalDiscount: 0 },
+          services: { count: billServices.length, baseTotal, finalTotal: total, totalDiscount: offerSaving },
           products: { count: 0, baseTotal: 0, finalTotal: 0, totalDiscount: 0 },
           memberships: { count: 0, baseTotal: 0, finalTotal: 0, totalDiscount: 0 }
         },
         totals: {
-          totalItems: billServices.length, subtotalBeforeDiscount: total, subtotalAfterItemDiscount: total,
-          totalItemDiscount: 0, couponDiscount: 0, grandTotal: total, totalDiscount: 0, totalSavings: 0, finalAmount: total
+          totalItems: billServices.length, subtotalBeforeDiscount: baseTotal, subtotalAfterItemDiscount: total,
+          totalItemDiscount: offerSaving, couponDiscount: 0, grandTotal: total, totalDiscount: offerSaving, totalSavings: offerSaving, finalAmount: total
         }
       },
       payment: {
@@ -197,6 +213,9 @@ const createAppointment = async (req, res) => {
       billType: 'APPOINTMENT',
       billStatus: 'APPOINTMENT',
       source: 'APP',
+      ...(offerSaving > 0 && {
+        appliedOffer: { offerId: offers.applied.offerId, title: offers.applied.title, rewardType: offers.applied.rewardType, saving: offerSaving }
+      }),
       staffChoice: staffId ? 'CLIENT' : 'AUTO',
       paymentMode,
       unitId: unit._id
@@ -241,9 +260,11 @@ const present = async (bill, units, staffNames) => {
       id: s.id,
       name: s.name,
       price: s.pricing?.totalPrice ?? null,
+      basePrice: s.pricing?.basePrice ?? s.pricing?.totalPrice ?? null,
       staff: s.staff ? { id: String(s.staff), name: names.get(String(s.staff)) || null } : null
     })),
     total: bill.calculations?.totals?.grandTotal ?? null,
+    offer: bill.appliedOffer?.offerId ? { title: bill.appliedOffer.title, saving: bill.appliedOffer.saving } : null,
     paymentMode: bill.paymentMode || null,
     paymentStatus: bill.payment?.paymentStatus || null,
     source: bill.source || null,
