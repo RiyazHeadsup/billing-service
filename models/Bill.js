@@ -429,6 +429,43 @@ const counterSchema = new mongoose.Schema({
 
 const Counter = mongoose.model('Counter', counterSchema);
 
+const toCode = (code) => String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+// Each salon gets its own bill series: <UNITCODE>-<YEAR>-<SEQ>, starting at 1 every year.
+// Bills without a salon keep the old shared BILL-<YEAR>-<SEQ> series.
+async function nextBillNumber(bill) {
+  const year = new Date().getFullYear();
+  const unitId = bill.unitId || (bill.business && bill.business.unitId);
+
+  if (!unitId) {
+    const counter = await Counter.findOneAndUpdate(
+      { name: 'billNumber' },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+    return `BILL-${year}-${counter.seq}`;
+  }
+
+  const Unit = require('./Unit');
+  const units = await Unit.find({}).select('unitCode').lean();
+  const own = units.find(u => String(u._id) === String(unitId));
+  let prefix = toCode(own && own.unitCode);
+  // Unit codes are typed by hand: if blank, or the same as an OLDER salon's code, add part of the salon id
+  // so two salons never produce the same bill number (billNumber is unique). The older salon keeps its
+  // plain prefix, so creating a new salon never changes an existing salon's numbering.
+  const clash = prefix && units.some(u => String(u._id) < String(unitId) && toCode(u.unitCode) === prefix);
+  if (!prefix || clash) {
+    prefix = [prefix, String(unitId).slice(-4).toUpperCase()].filter(Boolean).join('-');
+  }
+
+  const counter = await Counter.findOneAndUpdate(
+    { name: `billNumber:${unitId}:${year}` },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return `${prefix}-${year}-${counter.seq}`;
+}
+
 billSchema.pre('save', async function (next) {
   if (this.isNew) {
     try {
@@ -439,14 +476,7 @@ billSchema.pre('save', async function (next) {
       }
 
       if (!this.billNumber) {
-        const counter = await Counter.findOneAndUpdate(
-          { name: 'billNumber' },
-          { $inc: { seq: 1 } },
-          { new: true, upsert: true }
-        );
-
-        const year = new Date().getFullYear();
-        this.billNumber = `BILL-${year}-${counter.seq}`;
+        this.billNumber = await nextBillNumber(this);
       }
 
       next();
